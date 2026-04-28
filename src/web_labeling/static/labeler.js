@@ -830,12 +830,12 @@ document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveAnnotation(); return; }
   switch(e.key) {
-    case 'v': case 'V': setTool('select'); break;
-    case 'r': case 'R': setTool('rect'); break;
-    case 'p': case 'P': setTool('polygon'); break;
-    case 'a': case 'A': navFiltered(-1); break;
-    case 'd': case 'D': navFiltered(1); break;
-    case 'f': case 'F': fitView(); draw(); break;
+    case 'v': setTool('select'); break;
+    case 'r': setTool('rect'); break;
+    case 'p': setTool('polygon'); break;
+    case 'a': navFiltered(-1); break;
+    case 'd': navFiltered(1); break;
+    case 'f': fitView(); draw(); break;
     case 'Delete': case 'Backspace': deleteSelected(); break;
     case 'Escape':
       if (S.drawing) { S.drawing = false; S.drawPoints = []; draw(); }
