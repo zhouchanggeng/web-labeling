@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "web-labeling"
+version = "0.1.0"
+description = "Web-based image labeling tool compatible with X-AnyLabeling format"
+requires-python = ">=3.8"
+dependencies = [
+    "flask>=3.0",
+    "Pillow>=10.0",
+]
+
+[project.scripts]
+web-labeling = "web_labeling.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+web_labeling = ["static/*"]

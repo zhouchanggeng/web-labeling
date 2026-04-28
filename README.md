@@ -4,14 +4,16 @@
 
 ## 安装
 
+从 GitHub 安装（推荐）：
+
 ```bash
-pip install web-labeling
+pip install git+https://github.com/zhouchanggeng/web-labeling.git
 ```
 
-或从源码安装：
+或克隆后本地安装：
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/zhouchanggeng/web-labeling.git
 cd web-labeling
 pip install .
 ```
@@ -83,27 +85,12 @@ python app.py --data /path/to/images
 
 保存标注时统一输出为 X-AnyLabeling JSON 格式。
 
-## 发布到 PyPI
+## 发布到 PyPI（可选）
 
-构建并上传到 PyPI 后，其他机器就可以通过 `pip install web-labeling` 安装：
+如果需要通过 `pip install web-labeling` 直接安装：
 
 ```bash
-# 安装构建工具
 pip install build twine
-
-# 构建
 python -m build
-
-# 上传到 PyPI（需要 PyPI 账号）
 twine upload dist/*
-
-# 或上传到私有 PyPI
-twine upload --repository-url https://your-pypi-server/simple/ dist/*
-```
-
-上传成功后，任意机器执行：
-
-```bash
-pip install web-labeling
-web-labeling --data /path/to/images
 ```
