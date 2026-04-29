@@ -36,12 +36,28 @@
       <span class="sep"></span>
       <span id="img-resolution"></span>
     </div>
+    <div id="compare-bar" style="display:none">
+      <span id="compare-info"></span>
+      <div id="compare-filters">
+        <button class="cmp-filter active" data-filter="all">全部</button>
+        <button class="cmp-filter" data-filter="a_only">仅A检出 <span id="cmp-cnt-a">0</span></button>
+        <button class="cmp-filter" data-filter="b_only">仅B检出 <span id="cmp-cnt-b">0</span></button>
+        <button class="cmp-filter" data-filter="mismatch">类别不一致 <span id="cmp-cnt-m">0</span></button>
+        <button class="cmp-filter" data-filter="both">一致 <span id="cmp-cnt-ok">0</span></button>
+      </div>
+      <div id="compare-legend">
+        <span class="legend-a">■ 模型A</span>
+        <span class="legend-b">■ 模型B</span>
+      </div>
+      <button id="btn-compare-close" title="关闭对比">✕ 关闭对比</button>
+    </div>
     <div id="canvas-wrap">
       <canvas id="canvas"></canvas>
     </div>
   </div>
   <div id="right-panel">
-    <h3>标注列表</h3>
+    <h3>标注列表 <button id="btn-toggle-labels" title="显示/隐藏标签文字" style="float:right;background:none;border:none;color:#a6adc8;cursor:pointer;font-size:12px;padding:0 4px;margin-right:2px;">Aa</button><button id="btn-toggle-all-vis" title="显示/隐藏全部" style="float:right;background:none;border:none;color:#a6adc8;cursor:pointer;font-size:14px;padding:0 4px;">👁</button></h3>
+    <div id="mouse-coords">坐标: -</div>
     <div id="shape-list"></div>
     <div id="shape-editor" style="display:none">
       <h4>编辑标注</h4>
@@ -49,6 +65,28 @@
       <datalist id="label-suggestions"></datalist>
       <label>group_id: <input id="edit-group" type="text"></label>
       <div id="edit-flags"></div>
+    </div>
+    <div id="shortcuts-help">
+      <h4>快捷键</h4>
+      <div class="shortcut-list">
+        <div><kbd>A</kbd> 上一张</div>
+        <div><kbd>D</kbd> 下一张</div>
+        <div><kbd>V</kbd> 选择模式</div>
+        <div><kbd>R</kbd> 画矩形</div>
+        <div><kbd>P</kbd> 画多边形</div>
+        <div><kbd>F</kbd> 适应窗口</div>
+        <div><kbd>Del</kbd> 删除选中</div>
+        <div><kbd>Esc</kbd> 取消/取消选中</div>
+        <div><kbd>+/-</kbd> 缩放</div>
+        <div><kbd>Ctrl+S</kbd> 保存</div>
+        <div><kbd>Alt+拖拽</kbd> 平移画布</div>
+        <div><kbd>右键</kbd> 上下文菜单</div>
+      </div>
+    </div>
+    <div id="panel-actions">
+      <button id="btn-compare" title="模型对比">🔀 对比</button>
+      <button id="btn-conflicts" title="检测冲突标注">⚠ 冲突</button>
+      <button id="btn-analyze" title="标注统计分析">📊 分析</button>
     </div>
   </div>
 </div>
@@ -58,6 +96,7 @@
   <div class="dialog-box">
     <h3>输入标签</h3>
     <input id="dialog-label" type="text" list="label-suggestions" placeholder="标签名称" autofocus>
+    <div id="dialog-label-picks"></div>
     <div class="dialog-btns">
       <button id="dialog-ok">确定</button>
       <button id="dialog-cancel">取消</button>
@@ -97,6 +136,68 @@
       <button id="folder-cancel">取消</button>
     </div>
   </div>
+</div>
+<!-- Compare setup dialog -->
+<div id="compare-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box compare-dialog-box">
+    <h3>模型对比设置</h3>
+    <div class="cmp-section">
+      <label class="cmp-label">模型A 标注目录:</label>
+      <div class="folder-path-row">
+        <input id="cmp-a-path" type="text" placeholder="模型A推理结果目录">
+        <button id="cmp-a-browse">浏览</button>
+      </div>
+      <div id="cmp-a-list"></div>
+      <label class="cmp-label">格式:</label>
+      <select id="cmp-a-format">
+        <option value="auto">自动检测</option>
+        <option value="json">X-AnyLabeling (JSON)</option>
+        <option value="voc">VOC (XML)</option>
+        <option value="coco">COCO (JSON)</option>
+        <option value="yolo">YOLO (TXT)</option>
+      </select>
+    </div>
+    <div class="cmp-section">
+      <label class="cmp-label">模型B 标注目录:</label>
+      <div class="folder-path-row">
+        <input id="cmp-b-path" type="text" placeholder="模型B推理结果目录">
+        <button id="cmp-b-browse">浏览</button>
+      </div>
+      <div id="cmp-b-list"></div>
+      <label class="cmp-label">格式:</label>
+      <select id="cmp-b-format">
+        <option value="auto">自动检测</option>
+        <option value="json">X-AnyLabeling (JSON)</option>
+        <option value="voc">VOC (XML)</option>
+        <option value="coco">COCO (JSON)</option>
+        <option value="yolo">YOLO (TXT)</option>
+      </select>
+    </div>
+    <div class="dialog-btns">
+      <button id="cmp-start">开始对比</button>
+      <button id="cmp-cancel">取消</button>
+    </div>
+  </div>
+</div>
+<!-- Analysis dialog -->
+<div id="analysis-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box analysis-dialog-box">
+    <h3>标注统计分析</h3>
+    <div id="analysis-content">加载中...</div>
+    <div class="dialog-btns">
+      <button id="analysis-close">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- Context menu -->
+<div id="context-menu" style="display:none">
+  <div class="ctx-item" data-action="change-label">✏️ 更改标签</div>
+  <div class="ctx-item" data-action="delete">🗑 删除</div>
+  <div class="ctx-item" data-action="duplicate">📋 复制</div>
+  <div class="ctx-item" data-action="to-front">⬆ 置顶</div>
+  <div class="ctx-item" data-action="to-back">⬇ 置底</div>
 </div>
 <script src="/static/labeler.js"></script>
 </body>

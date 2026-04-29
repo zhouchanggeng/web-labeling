@@ -21,6 +21,8 @@ const S = {
   labelMap: {},        // {label: [img_name, ...]}
   filterLabel: null,   // active label filter, null = show all
   filteredImages: [],   // indices into S.images matching filter
+  // Display options
+  showLabels: true,     // whether to show label text on shapes
 };
 
 const COLORS = ['#f38ba8','#a6e3a1','#89b4fa','#fab387','#cba6f7','#f9e2af','#94e2d5','#f2cdcd','#89dceb','#eba0ac'];
@@ -59,8 +61,10 @@ function updateFilteredImages() {
   }
 }
 
-function setLabelFilter(label) {
+async function setLabelFilter(label) {
   S.filterLabel = S.filterLabel === label ? null : label;
+  // Re-fetch labels to get up-to-date counts
+  await fetchLabels();
   updateFilteredImages();
   renderLabelFilter();
   renderImageList();
@@ -81,7 +85,7 @@ function renderLabelFilter() {
 }
 
 async function loadImage(idx) {
-  if (S.dirty && !confirm('当前标注未保存，是否切换？')) return;
+  if (S.dirty) await saveAnnotation();
   S.currentIdx = idx;
   S.selectedIdx = -1;
   S.drawing = false;
@@ -281,6 +285,7 @@ function _draw() {
 
   // Draw shapes
   S.shapes.forEach((s, i) => {
+    if (s._hidden) return;
     const selected = i === S.selectedIdx;
     const color = colorFor(s.label || 'default');
     ctx.save();
@@ -337,7 +342,7 @@ function _draw() {
     }
 
     // Label text with background
-    if (s.points.length > 0) {
+    if (S.showLabels && s.points.length > 0) {
       const r = shapeRect(s);
       const [lx, ly] = toCanvas(r.x, r.y);
       const fontSize = Math.max(13, 15 * Math.min(S.scale, 2));
@@ -528,6 +533,14 @@ canvas.addEventListener('mousemove', e => {
   S.mouseX = mx;
   S.mouseY = my;
 
+  // Update coordinate display
+  const [imgX, imgY] = toImage(mx, my);
+  if (S.img && imgX >= 0 && imgX <= S.imgW && imgY >= 0 && imgY <= S.imgH) {
+    document.getElementById('mouse-coords').textContent = `坐标: ${Math.round(imgX)}, ${Math.round(imgY)}`;
+  } else {
+    document.getElementById('mouse-coords').textContent = '坐标: -';
+  }
+
   if (S.panning) {
     S.offsetX = S.panStart.ox + (mx - S.panStart.x);
     S.offsetY = S.panStart.oy + (my - S.panStart.y);
@@ -567,18 +580,25 @@ canvas.addEventListener('mousemove', e => {
     return;
   }
 
-  // Cursor
+  // Hover-select in select mode
   if (S.tool === 'select' && !S.dragging) {
     const hi = hitHandle(mx, my, S.selectedIdx);
     if (hi >= 0) { canvas.style.cursor = 'grab'; return; }
     const idx = hitTest(mx, my);
     canvas.style.cursor = idx >= 0 ? 'move' : 'default';
+    if (idx !== S.selectedIdx) {
+      S.selectedIdx = idx;
+      renderShapeList();
+      updateEditor();
+      draw();
+    }
   }
 });
 
 canvas.addEventListener('mouseleave', () => {
   S.mouseX = -1;
   S.mouseY = -1;
+  document.getElementById('mouse-coords').textContent = '坐标: -';
   draw();
 });
 
@@ -625,6 +645,17 @@ canvas.addEventListener('contextmenu', e => {
   e.preventDefault();
   if (S.drawing && S.tool === 'polygon' && S.drawPoints.length >= 3) {
     finishPolygon();
+    return;
+  }
+  // Right-click context menu for shapes
+  const mx = e.offsetX, my = e.offsetY;
+  const idx = hitTest(mx, my);
+  if (idx >= 0) {
+    S.selectedIdx = idx;
+    renderShapeList();
+    updateEditor();
+    draw();
+    showContextMenu(e.clientX, e.clientY);
   }
 });
 
@@ -667,6 +698,21 @@ function promptLabel(cb) {
   inp.select();
   updateLabelSuggestions();
 
+  // Render quick-pick label buttons
+  const picks = document.getElementById('dialog-label-picks');
+  const globalLabels = Object.keys(S.labelMap);
+  const labels = [...new Set([...S.labelHistory, ...globalLabels, ...S.shapes.map(s => s.label).filter(Boolean)])];
+  picks.innerHTML = labels.map(l => {
+    const c = colorFor(l);
+    return `<span class="label-pick" style="border-color:${c}" data-label="${l}">${l}</span>`;
+  }).join('');
+  picks.querySelectorAll('.label-pick').forEach(el => {
+    el.addEventListener('click', () => {
+      inp.value = el.dataset.label;
+      done(true);
+    });
+  });
+
   function done(ok) {
     dlg.style.display = 'none';
     cleanup();
@@ -694,8 +740,9 @@ function addLabelHistory(label) {
 function updateLabelSuggestions() {
   const dl = document.getElementById('label-suggestions');
   dl.innerHTML = '';
-  // Collect from current shapes + history
-  const labels = [...new Set([...S.labelHistory, ...S.shapes.map(s => s.label).filter(Boolean)])];
+  // Collect from global labels + history + current shapes
+  const globalLabels = Object.keys(S.labelMap);
+  const labels = [...new Set([...S.labelHistory, ...globalLabels, ...S.shapes.map(s => s.label).filter(Boolean)])];
   labels.forEach(l => { const o = document.createElement('option'); o.value = l; dl.appendChild(o); });
 }
 
@@ -728,20 +775,66 @@ function renderShapeList() {
   const list = document.getElementById('shape-list');
   list.innerHTML = S.shapes.map((s, i) => {
     const c = colorFor(s.label || 'default');
-    return `<div class="shape-item${i === S.selectedIdx ? ' selected' : ''}" data-idx="${i}">
-      <span><span class="color-dot" style="background:${c}"></span>${s.label || '(no label)'}</span>
-      <span style="color:#6c7086;font-size:11px">${s.shape_type}</span>
+    const hidden = s._hidden;
+    const eyeIcon = hidden ? '👁‍🗨' : '👁';
+    const dimStyle = hidden ? ' opacity:0.4;' : '';
+    const r = shapeRect(s);
+    const sizeText = r.w > 0 ? `${Math.round(r.w)}×${Math.round(r.h)}` : '';
+    return `<div class="shape-item${i === S.selectedIdx ? ' selected' : ''}" data-idx="${i}" style="${dimStyle}">
+      <span><span class="color-dot" style="background:${c}"></span>${s.label || '(no label)'} <span class="shape-size">${sizeText}</span></span>
+      <span style="display:flex;align-items:center;gap:4px">
+        <span style="color:#6c7086;font-size:11px">${s.shape_type}</span>
+        <button class="btn-vis-shape" data-idx="${i}" title="${hidden ? '显示' : '隐藏'}" style="background:none;border:none;color:#a6adc8;cursor:pointer;font-size:13px;padding:0 2px;">${eyeIcon}</button>
+        <button class="btn-del-shape" data-idx="${i}" title="删除" style="background:none;border:none;color:#e06c75;cursor:pointer;font-size:14px;padding:0 2px;">✕</button>
+      </span>
     </div>`;
   }).join('');
   list.querySelectorAll('.shape-item').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('btn-del-shape') || e.target.classList.contains('btn-vis-shape')) return;
       S.selectedIdx = parseInt(el.dataset.idx);
       renderShapeList();
       updateEditor();
       draw();
     });
   });
+  list.querySelectorAll('.btn-vis-shape').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(el.dataset.idx);
+      S.shapes[idx]._hidden = !S.shapes[idx]._hidden;
+      renderShapeList();
+      draw();
+    });
+  });
+  list.querySelectorAll('.btn-del-shape').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = parseInt(el.dataset.idx);
+      S.shapes.splice(idx, 1);
+      if (S.selectedIdx === idx) S.selectedIdx = -1;
+      else if (S.selectedIdx > idx) S.selectedIdx--;
+      S.dirty = true;
+      renderShapeList();
+      updateEditor();
+      draw();
+    });
+  });
 }
+
+document.getElementById('btn-toggle-all-vis').addEventListener('click', () => {
+  const allHidden = S.shapes.length > 0 && S.shapes.every(s => s._hidden);
+  S.shapes.forEach(s => s._hidden = !allHidden);
+  document.getElementById('btn-toggle-all-vis').textContent = allHidden ? '👁' : '👁‍🗨';
+  renderShapeList();
+  draw();
+});
+
+document.getElementById('btn-toggle-labels').addEventListener('click', () => {
+  S.showLabels = !S.showLabels;
+  document.getElementById('btn-toggle-labels').style.color = S.showLabels ? '#a6adc8' : '#585b70';
+  draw();
+});
 
 function updateEditor() {
   const editor = document.getElementById('shape-editor');
@@ -824,6 +917,79 @@ function deleteSelected() {
   draw();
 }
 
+// ============ Context menu ============
+const ctxMenu = document.getElementById('context-menu');
+
+function showContextMenu(x, y) {
+  ctxMenu.style.left = x + 'px';
+  ctxMenu.style.top = y + 'px';
+  ctxMenu.style.display = 'block';
+  // Adjust if overflows viewport
+  const rect = ctxMenu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) ctxMenu.style.left = (x - rect.width) + 'px';
+  if (rect.bottom > window.innerHeight) ctxMenu.style.top = (y - rect.height) + 'px';
+}
+
+function hideContextMenu() { ctxMenu.style.display = 'none'; }
+
+document.addEventListener('mousedown', e => {
+  if (!ctxMenu.contains(e.target)) hideContextMenu();
+});
+
+ctxMenu.querySelectorAll('.ctx-item').forEach(el => {
+  el.addEventListener('click', () => {
+    const action = el.dataset.action;
+    const idx = S.selectedIdx;
+    hideContextMenu();
+    if (idx < 0) return;
+    switch (action) {
+      case 'change-label':
+        promptLabel(label => {
+          S.shapes[idx].label = label;
+          S.dirty = true;
+          addLabelHistory(label);
+          renderShapeList();
+          updateEditor();
+          draw();
+        });
+        break;
+      case 'delete':
+        deleteSelected();
+        break;
+      case 'duplicate': {
+        const copy = JSON.parse(JSON.stringify(S.shapes[idx]));
+        // Offset the copy slightly so it's visible
+        copy.points = copy.points.map(([x, y]) => [x + 10, y + 10]);
+        S.shapes.push(copy);
+        S.selectedIdx = S.shapes.length - 1;
+        S.dirty = true;
+        renderShapeList();
+        updateEditor();
+        draw();
+        break;
+      }
+      case 'to-front': {
+        const shape = S.shapes.splice(idx, 1)[0];
+        S.shapes.push(shape);
+        S.selectedIdx = S.shapes.length - 1;
+        S.dirty = true;
+        renderShapeList();
+        draw();
+        break;
+      }
+      case 'to-back': {
+        const shape = S.shapes.splice(idx, 1)[0];
+        S.shapes.unshift(shape);
+        S.selectedIdx = 0;
+        S.dirty = true;
+        renderShapeList();
+        draw();
+        break;
+      }
+    }
+  });
+});
+
 // ============ Keyboard shortcuts ============
 document.addEventListener('keydown', e => {
   // Don't handle when typing in inputs
@@ -866,7 +1032,13 @@ async function openFolderDialog() {
 async function browseTo(dirPath, listId) {
   const r = await fetch('/api/browse?path=' + encodeURIComponent(dirPath));
   const data = await r.json();
-  const inputId = listId === 'folder-list' ? 'folder-path-input' : 'folder-label-input';
+  const inputMap = {
+    'folder-list': 'folder-path-input',
+    'folder-label-list': 'folder-label-input',
+    'cmp-a-list': 'cmp-a-path',
+    'cmp-b-list': 'cmp-b-path',
+  };
+  const inputId = inputMap[listId] || 'folder-path-input';
   document.getElementById(inputId).value = data.path;
   const list = document.getElementById(listId);
   if (data.error) {
@@ -878,11 +1050,26 @@ async function browseTo(dirPath, listId) {
   data.dirs.forEach((d, i) => {
     paths.push(data.path + '/' + d.name);
     const imgInfo = d.img_count > 0 ? `<span class="folder-img-count">${d.img_count} 张图片</span>` : '';
-    html += `<div class="folder-item" data-idx="${i + 1}">📁 ${d.name}${imgInfo}</div>`;
+    html += `<div class="folder-item" data-idx="${i + 1}">
+      <span class="folder-item-name">📁 ${d.name}${imgInfo}</span>
+      <button class="btn-pick-folder" data-idx="${i + 1}" title="选择此目录">✔</button>
+    </div>`;
   });
   list.innerHTML = html;
-  list.querySelectorAll('.folder-item').forEach(el => {
-    el.addEventListener('click', () => browseTo(paths[parseInt(el.dataset.idx)], listId));
+  list.querySelectorAll('.folder-item-name').forEach(el => {
+    const item = el.closest('.folder-item');
+    el.addEventListener('click', () => browseTo(paths[parseInt(item.dataset.idx)], listId));
+  });
+  // ".." item has no pick button, just navigate
+  const dotdot = list.querySelector('.folder-item[data-idx="0"]');
+  if (dotdot) dotdot.addEventListener('click', () => browseTo(paths[0], listId));
+  list.querySelectorAll('.btn-pick-folder').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const p = paths[parseInt(el.dataset.idx)];
+      document.getElementById(inputId).value = p;
+      list.innerHTML = '';
+    });
   });
 }
 
@@ -924,6 +1111,413 @@ document.getElementById('folder-select').addEventListener('click', async () => {
 document.getElementById('folder-cancel').addEventListener('click', () => {
   document.getElementById('folder-dialog').style.display = 'none';
 });
+
+// ============ Analysis ============
+document.getElementById('btn-analyze').addEventListener('click', async () => {
+  const dlg = document.getElementById('analysis-dialog');
+  const content = document.getElementById('analysis-content');
+  dlg.style.display = 'block';
+  content.innerHTML = '扫描标注中...';
+  try {
+    const r = await fetch('/api/analysis');
+    const d = await r.json();
+    if (!d.ok) { content.innerHTML = '分析失败'; return; }
+    content.innerHTML = renderAnalysis(d);
+  } catch (e) {
+    content.innerHTML = '请求失败: ' + e.message;
+  }
+});
+
+document.getElementById('analysis-close').addEventListener('click', () => {
+  document.getElementById('analysis-dialog').style.display = 'none';
+});
+
+function renderAnalysis(d) {
+  const cc = d.class_counts;
+  const cs = d.class_stats;
+  const labels = Object.keys(cc).sort((a, b) => cc[b] - cc[a]);
+  const maxCount = Math.max(...Object.values(cc), 1);
+  const sd = d.size_distribution;
+
+  // Overview stats
+  let html = `<div class="analysis-grid">
+    <div class="analysis-stat"><div class="val">${d.total_images}</div><div class="lbl">总图片数</div></div>
+    <div class="analysis-stat"><div class="val">${d.images_with_ann}</div><div class="lbl">有标注图片</div></div>
+    <div class="analysis-stat"><div class="val">${d.total_boxes}</div><div class="lbl">总标注框数</div></div>
+    <div class="analysis-stat"><div class="val">${d.avg_boxes_per_image}</div><div class="lbl">平均每张框数</div></div>
+  </div>`;
+
+  // Class distribution
+  html += `<div class="analysis-section"><h4>类别分布</h4><table class="analysis-table">
+    <tr><th>类别</th><th>数量</th><th>占比</th><th>分布</th></tr>`;
+  labels.forEach(l => {
+    const cnt = cc[l];
+    const pct = (cnt / d.total_boxes * 100).toFixed(1);
+    const barW = (cnt / maxCount * 100).toFixed(1);
+    const c = colorFor(l);
+    html += `<tr><td>${l}</td><td>${cnt}</td><td>${pct}%</td>
+      <td><div class="analysis-bar-wrap"><div class="analysis-bar" style="width:${barW}%;background:${c}"></div></div></td></tr>`;
+  });
+  html += `</table></div>`;
+
+  // Size distribution
+  const sdTotal = sd.small + sd.medium + sd.large || 1;
+  html += `<div class="analysis-section"><h4>框尺寸分布 (按面积占比)</h4><table class="analysis-table">
+    <tr><th>类型</th><th>数量</th><th>占比</th><th>说明</th></tr>
+    <tr><td>小目标</td><td>${sd.small}</td><td>${(sd.small/sdTotal*100).toFixed(1)}%</td><td>面积 &lt; 1%</td></tr>
+    <tr><td>中目标</td><td>${sd.medium}</td><td>${(sd.medium/sdTotal*100).toFixed(1)}%</td><td>1% ≤ 面积 &lt; 10%</td></tr>
+    <tr><td>大目标</td><td>${sd.large}</td><td>${(sd.large/sdTotal*100).toFixed(1)}%</td><td>面积 ≥ 10%</td></tr>
+  </table></div>`;
+
+  // Per-class size stats
+  html += `<div class="analysis-section"><h4>各类别框尺寸 (归一化)</h4><table class="analysis-table">
+    <tr><th>类别</th><th>数量</th><th>平均宽</th><th>平均高</th><th>宽范围</th><th>高范围</th></tr>`;
+  labels.forEach(l => {
+    const s = cs[l];
+    if (!s) return;
+    html += `<tr><td>${l}</td><td>${s.count}</td>
+      <td>${s.avg_w}</td><td>${s.avg_h}</td>
+      <td>${s.min_w} ~ ${s.max_w}</td><td>${s.min_h} ~ ${s.max_h}</td></tr>`;
+  });
+  html += `</table></div>`;
+
+  // Width-Height scatter (simple canvas-based)
+  if (d.box_widths.length > 0) {
+    html += `<div class="analysis-section"><h4>宽高分布散点图</h4>
+      <canvas id="analysis-scatter" width="500" height="300" style="background:#11111b;border-radius:6px;width:100%;"></canvas></div>`;
+  }
+
+  // Use setTimeout to draw scatter after DOM update
+  setTimeout(() => drawScatter(d.box_widths, d.box_heights, labels, cc), 50);
+  return html;
+}
+
+function drawScatter(widths, heights) {
+  const canvas = document.getElementById('analysis-scatter');
+  if (!canvas) return;
+  const ctx2 = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const pad = 40;
+
+  // Axes
+  ctx2.strokeStyle = '#45475a';
+  ctx2.lineWidth = 1;
+  ctx2.beginPath();
+  ctx2.moveTo(pad, pad);
+  ctx2.lineTo(pad, H - pad);
+  ctx2.lineTo(W - pad, H - pad);
+  ctx2.stroke();
+
+  // Labels
+  ctx2.fillStyle = '#6c7086';
+  ctx2.font = '11px sans-serif';
+  ctx2.fillText('归一化宽度', W / 2 - 20, H - 8);
+  ctx2.save();
+  ctx2.translate(12, H / 2 + 20);
+  ctx2.rotate(-Math.PI / 2);
+  ctx2.fillText('归一化高度', 0, 0);
+  ctx2.restore();
+
+  // Ticks
+  for (let i = 0; i <= 4; i++) {
+    const v = (i * 0.25).toFixed(2);
+    const x = pad + (W - 2 * pad) * (i / 4);
+    const y = H - pad - (H - 2 * pad) * (i / 4);
+    ctx2.fillStyle = '#45475a';
+    ctx2.fillText(v, x - 10, H - pad + 14);
+    ctx2.fillText(v, 4, y + 4);
+  }
+
+  // Points
+  const maxW = Math.max(...widths, 0.01);
+  const maxH = Math.max(...heights, 0.01);
+  const scaleX = (W - 2 * pad) / Math.min(maxW * 1.1, 1);
+  const scaleY = (H - 2 * pad) / Math.min(maxH * 1.1, 1);
+
+  ctx2.fillStyle = 'rgba(137, 180, 250, 0.4)';
+  for (let i = 0; i < widths.length; i++) {
+    const x = pad + widths[i] * scaleX;
+    const y = H - pad - heights[i] * scaleY;
+    ctx2.beginPath();
+    ctx2.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx2.fill();
+  }
+}
+
+// ============ Conflict detection ============
+document.getElementById('btn-conflicts').addEventListener('click', async () => {
+  document.getElementById('btn-conflicts').textContent = '⚠ 检测中...';
+  document.getElementById('btn-conflicts').disabled = true;
+  try {
+    const r = await fetch('/api/conflicts?iou=0.5');
+    const data = await r.json();
+    if (!data.ok || data.total_images === 0) {
+      alert(`未发现冲突标注 (共扫描 ${S.images.length} 张图片)`);
+      return;
+    }
+    // Filter image list to only conflict images
+    const conflictNames = new Set(data.conflicts.map(c => c.image));
+    S.filteredImages = S.images.map((name, i) => ({ name, i }))
+      .filter(x => conflictNames.has(x.name))
+      .map(x => x.i);
+    renderImageList();
+    alert(`发现 ${data.total_images} 张图片存在冲突标注 (共 ${data.total_pairs} 对), 已过滤显示`);
+    if (S.filteredImages.length > 0) loadImage(S.filteredImages[0]);
+  } finally {
+    document.getElementById('btn-conflicts').textContent = '⚠ 冲突';
+    document.getElementById('btn-conflicts').disabled = false;
+  }
+});
+
+// ============ Compare mode ============
+const CMP = {
+  active: false,
+  filter: 'all',       // all | a_only | b_only | mismatch | both
+  a_only_imgs: [],
+  b_only_imgs: [],
+  mismatch_imgs: [],
+  both_imgs: [],
+  currentDiff: null,    // diff for current image
+  annA: null,
+  annB: null,
+  aName: '',
+  bName: '',
+};
+
+document.getElementById('btn-compare').addEventListener('click', () => {
+  if (CMP.active) return;
+  const dlg = document.getElementById('compare-dialog');
+  dlg.style.display = 'block';
+  // Pre-fill with last used paths if available
+  if (CMP.aName) {
+    // Keep existing values
+  } else {
+    const labelDir = document.getElementById('folder-label-input')?.value || '';
+    if (!document.getElementById('cmp-a-path').value) {
+      document.getElementById('cmp-a-path').value = labelDir;
+    }
+  }
+});
+
+document.getElementById('cmp-a-browse').addEventListener('click', () => {
+  const p = document.getElementById('cmp-a-path').value || '~';
+  browseTo(p, 'cmp-a-list');
+});
+document.getElementById('cmp-a-path').addEventListener('keydown', e => {
+  if (e.key === 'Enter') browseTo(e.target.value, 'cmp-a-list');
+});
+document.getElementById('cmp-b-browse').addEventListener('click', () => {
+  const p = document.getElementById('cmp-b-path').value || '~';
+  browseTo(p, 'cmp-b-list');
+});
+document.getElementById('cmp-b-path').addEventListener('keydown', e => {
+  if (e.key === 'Enter') browseTo(e.target.value, 'cmp-b-list');
+});
+
+document.getElementById('cmp-cancel').addEventListener('click', () => {
+  document.getElementById('compare-dialog').style.display = 'none';
+});
+
+document.getElementById('cmp-start').addEventListener('click', async () => {
+  const aPath = document.getElementById('cmp-a-path').value.trim();
+  const bPath = document.getElementById('cmp-b-path').value.trim();
+  if (!aPath || !bPath) { alert('请填写两个标注目录'); return; }
+  const aFmt = document.getElementById('cmp-a-format').value;
+  const bFmt = document.getElementById('cmp-b-format').value;
+  document.getElementById('cmp-start').textContent = '分析中...';
+  document.getElementById('cmp-start').disabled = true;
+  try {
+    const r = await fetch('/api/compare/setup', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ a_path: aPath, b_path: bPath, a_format: aFmt, b_format: bFmt }),
+    });
+    const data = await r.json();
+    if (!data.ok) { alert(data.error || '对比失败'); return; }
+    CMP.active = true;
+    CMP.filter = 'all';
+    CMP.a_only_imgs = data.a_only_imgs;
+    CMP.b_only_imgs = data.b_only_imgs;
+    CMP.mismatch_imgs = data.mismatch_imgs;
+    CMP.both_imgs = data.both_imgs;
+    CMP.aName = data.a_name || 'A';
+    CMP.bName = data.b_name || 'B';
+    document.getElementById('compare-dialog').style.display = 'none';
+    enterCompareMode(data.summary);
+  } finally {
+    document.getElementById('cmp-start').textContent = '开始对比';
+    document.getElementById('cmp-start').disabled = false;
+  }
+});
+
+function enterCompareMode(summary) {
+  document.getElementById('compare-bar').style.display = 'flex';
+  document.getElementById('compare-info').textContent =
+    `对比: 匹配${summary.matched_count} | 仅A ${summary.a_only_count} | 仅B ${summary.b_only_count} | 不一致${summary.mismatch_count}`;
+  document.getElementById('cmp-cnt-a').textContent = CMP.a_only_imgs.length;
+  document.getElementById('cmp-cnt-b').textContent = CMP.b_only_imgs.length;
+  document.getElementById('cmp-cnt-m').textContent = CMP.mismatch_imgs.length;
+  document.getElementById('cmp-cnt-ok').textContent = CMP.both_imgs.length;
+  // Show model names in legend
+  document.querySelector('.legend-a').textContent = '■ A: ' + CMP.aName;
+  document.querySelector('.legend-b').textContent = '■ B: ' + CMP.bName;
+  // Update filter button labels
+  document.querySelector('[data-filter="a_only"]').innerHTML = `仅A检出 <span id="cmp-cnt-a">${CMP.a_only_imgs.length}</span>`;
+  document.querySelector('[data-filter="b_only"]').innerHTML = `仅B检出 <span id="cmp-cnt-b">${CMP.b_only_imgs.length}</span>`;
+  updateCompareFilter();
+  renderImageList();
+  if (S.filteredImages.length > 0) loadImage(S.filteredImages[0]);
+}
+
+document.getElementById('btn-compare-close').addEventListener('click', async () => {
+  await fetch('/api/compare/close', { method: 'POST' });
+  CMP.active = false;
+  CMP.currentDiff = null;
+  CMP.annA = null;
+  CMP.annB = null;
+  document.getElementById('compare-bar').style.display = 'none';
+  updateFilteredImages();
+  renderImageList();
+  draw();
+});
+
+document.querySelectorAll('.cmp-filter').forEach(btn => {
+  btn.addEventListener('click', () => {
+    CMP.filter = btn.dataset.filter;
+    document.querySelectorAll('.cmp-filter').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    updateCompareFilter();
+    renderImageList();
+  });
+});
+
+function updateCompareFilter() {
+  if (!CMP.active) { updateFilteredImages(); return; }
+  let names;
+  switch (CMP.filter) {
+    case 'a_only': names = new Set(CMP.a_only_imgs); break;
+    case 'b_only': names = new Set(CMP.b_only_imgs); break;
+    case 'mismatch': names = new Set(CMP.mismatch_imgs); break;
+    case 'both': names = new Set(CMP.both_imgs); break;
+    default: names = null;
+  }
+  if (!names) {
+    S.filteredImages = S.images.map((_, i) => i);
+  } else {
+    S.filteredImages = S.images.map((name, i) => ({ name, i }))
+      .filter(x => names.has(x.name))
+      .map(x => x.i);
+  }
+}
+
+// Patch loadImage to also load compare annotations
+const _origLoadImage = loadImage;
+async function loadImageCompare(idx) {
+  await _origLoadImage(idx);
+  if (!CMP.active) { CMP.currentDiff = null; CMP.annA = null; CMP.annB = null; return; }
+  const name = S.images[idx];
+  try {
+    const r = await fetch('/api/compare/annotation/' + encodeURIComponent(name));
+    const data = await r.json();
+    if (data.ok) {
+      CMP.annA = data.a;
+      CMP.annB = data.b;
+      CMP.currentDiff = data.diff;
+    }
+  } catch (e) {
+    CMP.currentDiff = null;
+  }
+  draw();
+}
+
+// Replace loadImage globally
+loadImage = loadImageCompare;
+
+// Patch draw to overlay compare shapes
+const _origDraw = _draw;
+function _drawCompare() {
+  _origDraw();
+  if (!CMP.active || !CMP.currentDiff) return;
+  const diff = CMP.currentDiff;
+
+  // Draw A-only shapes (red dashed)
+  diff.a_only.forEach(s => drawCompareShape(s, '#f38ba8', [8, 4], 'A'));
+  // Draw B-only shapes (blue dashed)
+  diff.b_only.forEach(s => drawCompareShape(s, '#89b4fa', [8, 4], 'B'));
+  // Draw mismatched pairs
+  diff.mismatch.forEach(m => {
+    drawCompareShape(m.a, '#f38ba8', [6, 3], 'A:' + (m.a.label || ''));
+    drawCompareShape(m.b, '#89b4fa', [6, 3], 'B:' + (m.b.label || ''));
+  });
+}
+
+function drawCompareShape(s, color, dash, tag) {
+  const pts = s.points || [];
+  if (pts.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.setLineDash(dash);
+
+  if (s.shape_type === 'rectangle' && pts.length >= 2) {
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const [x1, y1] = toCanvas(Math.min(...xs), Math.min(...ys));
+    const [x2, y2] = toCanvas(Math.max(...xs), Math.max(...ys));
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.fillStyle = color + '20';
+    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+  } else {
+    ctx.beginPath();
+    const [sx, sy] = toCanvas(...pts[0]);
+    ctx.moveTo(sx, sy);
+    for (let j = 1; j < pts.length; j++) {
+      const [px, py] = toCanvas(...pts[j]);
+      ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color + '20';
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  // Tag label
+  if (tag && pts.length > 0) {
+    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+    const [lx, ly] = toCanvas(Math.min(...xs), Math.min(...ys));
+    const fontSize = Math.max(11, 13 * Math.min(S.scale, 2));
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.setLineDash([]);
+    const tm = ctx.measureText(tag);
+    ctx.fillStyle = color + 'cc';
+    ctx.beginPath();
+    ctx.roundRect(lx, ly - fontSize - 6, tm.width + 8, fontSize + 4, 3);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillText(tag, lx + 4, ly - 5);
+  }
+  ctx.restore();
+}
+
+// Replace _draw
+_draw = _drawCompare;
+
+// Patch renderImageList to show diff markers
+const _origRenderImageList = renderImageList;
+renderImageList = function() {
+  _origRenderImageList();
+  if (!CMP.active) return;
+  const aSet = new Set(CMP.a_only_imgs);
+  const bSet = new Set(CMP.b_only_imgs);
+  const mSet = new Set(CMP.mismatch_imgs);
+  document.querySelectorAll('#img-list .item').forEach(el => {
+    const idx = parseInt(el.dataset.idx);
+    const name = S.images[idx];
+    if (mSet.has(name)) el.classList.add('diff-mismatch');
+    else if (aSet.has(name)) el.classList.add('diff-a-only');
+    else if (bSet.has(name)) el.classList.add('diff-b-only');
+    else el.classList.add('diff-both');
+  });
+};
 
 // ============ Resize ============
 window.addEventListener('resize', () => {
