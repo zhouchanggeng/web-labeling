@@ -26,6 +26,23 @@ const S = {
 };
 
 const COLORS = ['#f38ba8','#a6e3a1','#89b4fa','#fab387','#cba6f7','#f9e2af','#94e2d5','#f2cdcd','#89dceb','#eba0ac'];
+
+// ============ Undo ============
+const _undoStack = [];
+const UNDO_MAX = 50;
+function pushUndo() {
+  _undoStack.push(JSON.stringify(S.shapes.map(exportShape)));
+  if (_undoStack.length > UNDO_MAX) _undoStack.shift();
+}
+function undo() {
+  if (!_undoStack.length) return;
+  S.shapes = JSON.parse(_undoStack.pop()).map(normalizeShape);
+  S.selectedIdx = -1;
+  S.dirty = true;
+  renderShapeList();
+  updateEditor();
+  draw();
+}
 function colorFor(label) {
   let h = 0;
   for (let i = 0; i < label.length; i++) h = ((h << 5) - h + label.charCodeAt(i)) | 0;
@@ -86,6 +103,7 @@ function renderLabelFilter() {
 
 async function loadImage(idx) {
   if (S.dirty) await saveAnnotation();
+  _undoStack.length = 0;
   S.currentIdx = idx;
   S.selectedIdx = -1;
   S.drawing = false;
@@ -220,23 +238,19 @@ function toImage(cx, cy) {
 }
 
 function fitView() {
-  // Use the actual CSS layout size of the wrapper
   const wrapW = wrap.clientWidth;
   const wrapH = wrap.clientHeight;
-  console.log('[fitView] wrap size:', wrapW, 'x', wrapH, 'img size:', S.imgW, 'x', S.imgH);
   if (wrapW <= 0 || wrapH <= 0) return;
   canvas.width = wrapW;
   canvas.height = wrapH;
   const pad = 40;
   const cw = wrapW - pad*2, ch = wrapH - pad*2;
   if (!S.imgW || !S.imgH || cw <= 0 || ch <= 0) return;
-  // Ensure image fits completely
   const scaleW = cw / S.imgW;
   const scaleH = ch / S.imgH;
   S.scale = Math.min(scaleW, scaleH);
   S.offsetX = (wrapW - S.imgW * S.scale) / 2;
   S.offsetY = (wrapH - S.imgH * S.scale) / 2;
-  console.log('[fitView] scale:', S.scale, 'offset:', S.offsetX, S.offsetY);
   invalidateImgCache();
   draw();
 }
@@ -269,18 +283,11 @@ function _draw() {
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Draw image from offscreen cache
+  // Draw image
   if (S.img) {
     const [ix, iy] = toCanvas(0, 0);
     const dw = S.imgW * S.scale, dh = S.imgH * S.scale;
-    // Use cached bitmap when available
-    if (_imgCache && Math.abs(_imgCacheScale - S.scale) < 0.001) {
-      ctx.drawImage(_imgCache, ix, iy);
-    } else {
-      ctx.drawImage(S.img, ix, iy, dw, dh);
-      // Cache at current scale (async, won't block)
-      _cacheImage(dw, dh);
-    }
+    ctx.drawImage(S.img, ix, iy, dw, dh);
   }
 
   // Draw shapes
@@ -466,6 +473,7 @@ function hitHandle(mx, my, shapeIdx) {
 
 // ============ Mouse events ============
 canvas.addEventListener('mousedown', e => {
+  if (SAM3.active && SAM3.pointMode && e.button === 0 && !e.altKey) return; // let click handler handle it
   const mx = e.offsetX, my = e.offsetY;
 
   // Middle button or space+click = pan
@@ -482,6 +490,7 @@ canvas.addEventListener('mousedown', e => {
     // Check handle drag first
     const hi = hitHandle(mx, my, S.selectedIdx);
     if (hi >= 0) {
+      pushUndo();
       S.dragging = true;
       S.dragType = 'handle';
       S.dragHandleIdx = hi;
@@ -492,6 +501,7 @@ canvas.addEventListener('mousedown', e => {
     const idx = hitTest(mx, my);
     if (idx >= 0) {
       S.selectedIdx = idx;
+      pushUndo();
       S.dragging = true;
       S.dragType = 'move';
       S.dragStart = toImage(mx, my);
@@ -617,6 +627,7 @@ canvas.addEventListener('mouseup', e => {
     const [x1,y1] = S.drawPoints[0], [x2,y2] = S.drawPoints[1];
     if (Math.abs(x2-x1) > 3 && Math.abs(y2-y1) > 3) {
       promptLabel(label => {
+        pushUndo();
         S.shapes.push(normalizeShape({
           label, shape_type: 'rectangle',
           points: [[Math.min(x1,x2),Math.min(y1,y2)],[Math.max(x1,x2),Math.max(y2,y1)]],
@@ -664,6 +675,7 @@ function finishPolygon() {
   S.drawing = false;
   S.drawPoints = [];
   promptLabel(label => {
+    pushUndo();
     S.shapes.push(normalizeShape({ label, shape_type: 'polygon', points: pts }));
     S.selectedIdx = S.shapes.length - 1;
     S.dirty = true;
@@ -847,6 +859,7 @@ function updateEditor() {
 
 document.getElementById('edit-label').addEventListener('change', e => {
   if (S.selectedIdx < 0) return;
+  pushUndo();
   S.shapes[S.selectedIdx].label = e.target.value;
   S.dirty = true;
   addLabelHistory(e.target.value);
@@ -909,6 +922,7 @@ function zoomCenter(factor) {
 
 function deleteSelected() {
   if (S.selectedIdx < 0) return;
+  pushUndo();
   S.shapes.splice(S.selectedIdx, 1);
   S.selectedIdx = -1;
   S.dirty = true;
@@ -945,6 +959,7 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(el => {
     switch (action) {
       case 'change-label':
         promptLabel(label => {
+          pushUndo();
           S.shapes[idx].label = label;
           S.dirty = true;
           addLabelHistory(label);
@@ -957,6 +972,7 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(el => {
         deleteSelected();
         break;
       case 'duplicate': {
+        pushUndo();
         const copy = JSON.parse(JSON.stringify(S.shapes[idx]));
         // Offset the copy slightly so it's visible
         copy.points = copy.points.map(([x, y]) => [x + 10, y + 10]);
@@ -969,6 +985,7 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(el => {
         break;
       }
       case 'to-front': {
+        pushUndo();
         const shape = S.shapes.splice(idx, 1)[0];
         S.shapes.push(shape);
         S.selectedIdx = S.shapes.length - 1;
@@ -978,6 +995,7 @@ ctxMenu.querySelectorAll('.ctx-item').forEach(el => {
         break;
       }
       case 'to-back': {
+        pushUndo();
         const shape = S.shapes.splice(idx, 1)[0];
         S.shapes.unshift(shape);
         S.selectedIdx = 0;
@@ -995,6 +1013,7 @@ document.addEventListener('keydown', e => {
   // Don't handle when typing in inputs
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   if (e.ctrlKey && e.key === 's') { e.preventDefault(); saveAnnotation(); return; }
+  if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undo(); return; }
   switch(e.key) {
     case 'v': setTool('select'); break;
     case 'r': setTool('rect'); break;
@@ -1002,6 +1021,7 @@ document.addEventListener('keydown', e => {
     case 'a': navFiltered(-1); break;
     case 'd': navFiltered(1); break;
     case 'f': fitView(); draw(); break;
+    case 'j': if (S.filteredImages.length > 0) loadImage(S.filteredImages[Math.floor(Math.random() * S.filteredImages.length)]); break;
     case 'Delete': case 'Backspace': deleteSelected(); break;
     case 'Escape':
       if (S.drawing) { S.drawing = false; S.drawPoints = []; draw(); }
@@ -1029,18 +1049,21 @@ async function openFolderDialog() {
   browseTo(info.path, 'folder-list');
 }
 
-async function browseTo(dirPath, listId) {
+// browseTo: listId can be a DOM element or a string id; inputEl can be passed directly
+async function browseTo(dirPath, listId, inputEl) {
   const r = await fetch('/api/browse?path=' + encodeURIComponent(dirPath));
   const data = await r.json();
   const inputMap = {
     'folder-list': 'folder-path-input',
     'folder-label-list': 'folder-label-input',
-    'cmp-a-list': 'cmp-a-path',
-    'cmp-b-list': 'cmp-b-path',
+    'cmp-gt-list': 'cmp-gt-path',
   };
-  const inputId = inputMap[listId] || 'folder-path-input';
-  document.getElementById(inputId).value = data.path;
-  const list = document.getElementById(listId);
+  const list = (typeof listId === 'string') ? document.getElementById(listId) : listId;
+  if (!inputEl) {
+    const mapKey = (typeof listId === 'string') ? listId : '';
+    inputEl = document.getElementById(inputMap[mapKey] || 'folder-path-input');
+  }
+  inputEl.value = data.path;
   if (data.error) {
     list.innerHTML = `<div class="folder-error">${data.error}</div>`;
     return;
@@ -1058,16 +1081,16 @@ async function browseTo(dirPath, listId) {
   list.innerHTML = html;
   list.querySelectorAll('.folder-item-name').forEach(el => {
     const item = el.closest('.folder-item');
-    el.addEventListener('click', () => browseTo(paths[parseInt(item.dataset.idx)], listId));
+    el.addEventListener('click', () => browseTo(paths[parseInt(item.dataset.idx)], listId, inputEl));
   });
   // ".." item has no pick button, just navigate
   const dotdot = list.querySelector('.folder-item[data-idx="0"]');
-  if (dotdot) dotdot.addEventListener('click', () => browseTo(paths[0], listId));
+  if (dotdot) dotdot.addEventListener('click', () => browseTo(paths[0], listId, inputEl));
   list.querySelectorAll('.btn-pick-folder').forEach(el => {
     el.addEventListener('click', (e) => {
       e.stopPropagation();
       const p = paths[parseInt(el.dataset.idx)];
-      document.getElementById(inputId).value = p;
+      inputEl.value = p;
       list.innerHTML = '';
     });
   });
@@ -1269,255 +1292,565 @@ document.getElementById('btn-conflicts').addEventListener('click', async () => {
   }
 });
 
-// ============ Compare mode ============
-const CMP = {
-  active: false,
-  filter: 'all',       // all | a_only | b_only | mismatch | both
-  a_only_imgs: [],
-  b_only_imgs: [],
-  mismatch_imgs: [],
-  both_imgs: [],
-  currentDiff: null,    // diff for current image
-  annA: null,
-  annB: null,
-  aName: '',
-  bName: '',
-};
+// ============ Evaluate mode ============
+let _evalCharts = []; // track Chart.js instances for cleanup
 
 document.getElementById('btn-compare').addEventListener('click', () => {
-  if (CMP.active) return;
-  const dlg = document.getElementById('compare-dialog');
-  dlg.style.display = 'block';
-  // Pre-fill with last used paths if available
-  if (CMP.aName) {
-    // Keep existing values
-  } else {
-    const labelDir = document.getElementById('folder-label-input')?.value || '';
-    if (!document.getElementById('cmp-a-path').value) {
-      document.getElementById('cmp-a-path').value = labelDir;
-    }
+  document.getElementById('compare-dialog').style.display = 'block';
+  // Pre-fill GT with current label dir
+  const gtInput = document.getElementById('cmp-gt-path');
+  if (!gtInput.value) {
+    gtInput.value = document.getElementById('folder-label-input')?.value || '';
   }
 });
 
-document.getElementById('cmp-a-browse').addEventListener('click', () => {
-  const p = document.getElementById('cmp-a-path').value || '~';
-  browseTo(p, 'cmp-a-list');
+// GT browse
+document.getElementById('cmp-gt-browse').addEventListener('click', () => {
+  browseTo(document.getElementById('cmp-gt-path').value || '~', 'cmp-gt-list');
 });
-document.getElementById('cmp-a-path').addEventListener('keydown', e => {
-  if (e.key === 'Enter') browseTo(e.target.value, 'cmp-a-list');
+document.getElementById('cmp-gt-path').addEventListener('keydown', e => {
+  if (e.key === 'Enter') browseTo(e.target.value, 'cmp-gt-list');
 });
-document.getElementById('cmp-b-browse').addEventListener('click', () => {
-  const p = document.getElementById('cmp-b-path').value || '~';
-  browseTo(p, 'cmp-b-list');
-});
-document.getElementById('cmp-b-path').addEventListener('keydown', e => {
-  if (e.key === 'Enter') browseTo(e.target.value, 'cmp-b-list');
+
+// Wire up browse for model entries (works for dynamically added ones too)
+function wireModelEntry(entry) {
+  const browseBtn = entry.querySelector('.cmp-model-browse');
+  const pathInput = entry.querySelector('.cmp-model-path');
+  const listDiv = entry.querySelector('.cmp-model-list');
+  browseBtn.addEventListener('click', () => {
+    browseTo(pathInput.value || '~', listDiv, pathInput);
+  });
+  pathInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') browseTo(e.target.value, listDiv, pathInput);
+  });
+}
+// Wire initial model entry
+document.querySelectorAll('.cmp-model-entry').forEach(wireModelEntry);
+
+// Add model button
+let _modelIdx = 1;
+document.getElementById('cmp-add-model').addEventListener('click', () => {
+  _modelIdx++;
+  const container = document.getElementById('cmp-models-container');
+  const div = document.createElement('div');
+  div.className = 'cmp-model-entry';
+  div.dataset.idx = _modelIdx - 1;
+  div.innerHTML = `
+    <label class="cmp-label">模型 ${_modelIdx} 标注目录: <span class="cmp-model-remove" title="移除" style="float:right;cursor:pointer;color:#f38ba8;">✕</span></label>
+    <div class="folder-path-row">
+      <input class="cmp-model-path" type="text" placeholder="模型推理结果目录">
+      <button class="cmp-model-browse">浏览</button>
+    </div>
+    <div class="cmp-model-list"></div>
+    <label class="cmp-label">格式:</label>
+    <select class="cmp-model-format">
+      <option value="auto">自动检测</option>
+      <option value="json">X-AnyLabeling (JSON)</option>
+      <option value="voc">VOC (XML)</option>
+      <option value="coco">COCO (JSON)</option>
+      <option value="yolo">YOLO (TXT)</option>
+    </select>`;
+  container.appendChild(div);
+  wireModelEntry(div);
+  div.querySelector('.cmp-model-remove').addEventListener('click', () => div.remove());
 });
 
 document.getElementById('cmp-cancel').addEventListener('click', () => {
   document.getElementById('compare-dialog').style.display = 'none';
 });
 
+// Start evaluation
 document.getElementById('cmp-start').addEventListener('click', async () => {
-  const aPath = document.getElementById('cmp-a-path').value.trim();
-  const bPath = document.getElementById('cmp-b-path').value.trim();
-  if (!aPath || !bPath) { alert('请填写两个标注目录'); return; }
-  const aFmt = document.getElementById('cmp-a-format').value;
-  const bFmt = document.getElementById('cmp-b-format').value;
-  document.getElementById('cmp-start').textContent = '分析中...';
-  document.getElementById('cmp-start').disabled = true;
+  const gtPath = document.getElementById('cmp-gt-path').value.trim();
+  const gtFmt = document.getElementById('cmp-gt-format').value;
+  if (!gtPath) { alert('请填写 GT 标注目录'); return; }
+
+  const entries = document.querySelectorAll('.cmp-model-entry');
+  const models = [];
+  entries.forEach((el, i) => {
+    const p = el.querySelector('.cmp-model-path').value.trim();
+    const f = el.querySelector('.cmp-model-format').value;
+    if (p) models.push({ path: p, format: f, name: p.split('/').filter(Boolean).pop() || ('模型' + (i+1)) });
+  });
+  if (models.length === 0) { alert('至少需要一个模型目录'); return; }
+
+  const btn = document.getElementById('cmp-start');
+  btn.textContent = '评估中...';
+  btn.disabled = true;
+
+  // Show progress bar
+  const dlgBox = document.querySelector('.compare-dialog-box');
+  let progWrap = document.getElementById('cmp-progress');
+  if (!progWrap) {
+    progWrap = document.createElement('div');
+    progWrap.id = 'cmp-progress';
+    progWrap.innerHTML = '<div class="cmp-prog-text"></div><div class="cmp-prog-bar-wrap"><div class="cmp-prog-bar"></div></div>';
+    dlgBox.querySelector('.dialog-btns').before(progWrap);
+  }
+  progWrap.style.display = 'block';
+  const progText = progWrap.querySelector('.cmp-prog-text');
+  const progBar = progWrap.querySelector('.cmp-prog-bar');
+  progText.textContent = '准备中...';
+  progBar.style.width = '0%';
+
   try {
-    const r = await fetch('/api/compare/setup', {
+    const r = await fetch('/api/evaluate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ a_path: aPath, b_path: bPath, a_format: aFmt, b_format: bFmt }),
+      body: JSON.stringify({ gt_path: gtPath, gt_format: gtFmt, models, iou_thresh: 0.5 }),
     });
-    const data = await r.json();
-    if (!data.ok) { alert(data.error || '对比失败'); return; }
-    CMP.active = true;
-    CMP.filter = 'all';
-    CMP.a_only_imgs = data.a_only_imgs;
-    CMP.b_only_imgs = data.b_only_imgs;
-    CMP.mismatch_imgs = data.mismatch_imgs;
-    CMP.both_imgs = data.both_imgs;
-    CMP.aName = data.a_name || 'A';
-    CMP.bName = data.b_name || 'B';
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    let finalData = null;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const msg = JSON.parse(line.slice(6));
+        if (msg.type === 'progress') {
+          const pct = ((msg.current + 0.5) / msg.total * 100).toFixed(0);
+          progText.textContent = `评估中 (${msg.current + 1}/${msg.total}): ${msg.name}`;
+          progBar.style.width = pct + '%';
+        } else if (msg.type === 'done') {
+          finalData = msg;
+          progBar.style.width = '100%';
+          progText.textContent = '完成';
+        }
+      }
+    }
+    if (!finalData || !finalData.ok) { alert(finalData?.error || '评估失败'); return; }
     document.getElementById('compare-dialog').style.display = 'none';
-    enterCompareMode(data.summary);
+    showEvalResults(finalData.results);
   } finally {
-    document.getElementById('cmp-start').textContent = '开始对比';
-    document.getElementById('cmp-start').disabled = false;
+    btn.textContent = '开始评估';
+    btn.disabled = false;
+    progWrap.style.display = 'none';
   }
 });
 
-function enterCompareMode(summary) {
-  document.getElementById('compare-bar').style.display = 'flex';
-  document.getElementById('compare-info').textContent =
-    `对比: 匹配${summary.matched_count} | 仅A ${summary.a_only_count} | 仅B ${summary.b_only_count} | 不一致${summary.mismatch_count}`;
-  document.getElementById('cmp-cnt-a').textContent = CMP.a_only_imgs.length;
-  document.getElementById('cmp-cnt-b').textContent = CMP.b_only_imgs.length;
-  document.getElementById('cmp-cnt-m').textContent = CMP.mismatch_imgs.length;
-  document.getElementById('cmp-cnt-ok').textContent = CMP.both_imgs.length;
-  // Show model names in legend
-  document.querySelector('.legend-a').textContent = '■ A: ' + CMP.aName;
-  document.querySelector('.legend-b').textContent = '■ B: ' + CMP.bName;
-  // Update filter button labels
-  document.querySelector('[data-filter="a_only"]').innerHTML = `仅A检出 <span id="cmp-cnt-a">${CMP.a_only_imgs.length}</span>`;
-  document.querySelector('[data-filter="b_only"]').innerHTML = `仅B检出 <span id="cmp-cnt-b">${CMP.b_only_imgs.length}</span>`;
-  updateCompareFilter();
-  renderImageList();
-  if (S.filteredImages.length > 0) loadImage(S.filteredImages[0]);
-}
+// Render evaluation results
+function showEvalResults(results) {
+  // Destroy old charts
+  _evalCharts.forEach(c => c.destroy());
+  _evalCharts = [];
 
-document.getElementById('btn-compare-close').addEventListener('click', async () => {
-  await fetch('/api/compare/close', { method: 'POST' });
-  CMP.active = false;
-  CMP.currentDiff = null;
-  CMP.annA = null;
-  CMP.annB = null;
-  document.getElementById('compare-bar').style.display = 'none';
-  updateFilteredImages();
-  renderImageList();
-  draw();
-});
+  const content = document.getElementById('eval-content');
+  const modelNames = Object.keys(results);
+  let html = '';
 
-document.querySelectorAll('.cmp-filter').forEach(btn => {
-  btn.addEventListener('click', () => {
-    CMP.filter = btn.dataset.filter;
-    document.querySelectorAll('.cmp-filter').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    updateCompareFilter();
-    renderImageList();
+  modelNames.forEach((name, mi) => {
+    const ev = results[name];
+    if (ev.error) {
+      html += `<div class="eval-model-section"><h4>${name}</h4><p style="color:#f38ba8;">${ev.error}</p></div>`;
+      return;
+    }
+    const labels = ev.labels || [];
+    html += `<div class="eval-model-section"><h4>📊 ${name}</h4>`;
+    // Metrics summary
+    html += `<div class="eval-metrics">
+      <div class="eval-metric"><div class="val">${(ev.mAP50 * 100).toFixed(1)}%</div><div class="lbl">mAP@50</div></div>
+      <div class="eval-metric"><div class="val">${ev.total_gt}</div><div class="lbl">GT 框数</div></div>
+      <div class="eval-metric"><div class="val">${ev.total_pred}</div><div class="lbl">预测框数</div></div>
+      <div class="eval-metric"><div class="val">${labels.length}</div><div class="lbl">类别数</div></div>
+    </div>`;
+    // Per-class AP table
+    html += `<div class="eval-ap-table"><table class="analysis-table"><tr><th>类别</th><th>AP@50</th></tr>`;
+    labels.forEach(l => {
+      const ap = ev.ap_per_class[l] || 0;
+      const barW = (ap * 100).toFixed(1);
+      html += `<tr><td>${l}</td><td><div class="eval-ap-bar-wrap"><div class="eval-ap-bar" style="width:${barW}%"></div><span>${(ap*100).toFixed(1)}%</span></div></td></tr>`;
+    });
+    html += `</table></div>`;
+    // Chart canvases
+    html += `<div class="eval-charts">
+      <div class="eval-chart-wrap"><h5>PR 曲线</h5><canvas id="eval-pr-${mi}"></canvas></div>
+      <div class="eval-chart-wrap"><h5>F1 曲线</h5><canvas id="eval-f1-${mi}"></canvas></div>
+      <div class="eval-chart-wrap eval-chart-full"><h5>混淆矩阵</h5><canvas id="eval-cm-${mi}"></canvas></div>
+    </div>`;
+    html += `</div>`;
   });
-});
 
-function updateCompareFilter() {
-  if (!CMP.active) { updateFilteredImages(); return; }
-  let names;
-  switch (CMP.filter) {
-    case 'a_only': names = new Set(CMP.a_only_imgs); break;
-    case 'b_only': names = new Set(CMP.b_only_imgs); break;
-    case 'mismatch': names = new Set(CMP.mismatch_imgs); break;
-    case 'both': names = new Set(CMP.both_imgs); break;
-    default: names = null;
-  }
-  if (!names) {
-    S.filteredImages = S.images.map((_, i) => i);
-  } else {
-    S.filteredImages = S.images.map((name, i) => ({ name, i }))
-      .filter(x => names.has(x.name))
-      .map(x => x.i);
-  }
+  content.innerHTML = html;
+  document.getElementById('eval-dialog').style.display = 'block';
+
+  // Draw charts after DOM update
+  setTimeout(() => {
+    modelNames.forEach((name, mi) => {
+      const ev = results[name];
+      if (ev.error) return;
+      drawPRChart(mi, ev);
+      drawF1Chart(mi, ev);
+      drawConfusionMatrix(mi, ev);
+    });
+  }, 50);
 }
 
-// Patch loadImage to also load compare annotations
-const _origLoadImage = loadImage;
-async function loadImageCompare(idx) {
-  await _origLoadImage(idx);
-  if (!CMP.active) { CMP.currentDiff = null; CMP.annA = null; CMP.annB = null; return; }
-  const name = S.images[idx];
+function drawPRChart(mi, ev) {
+  const el = document.getElementById('eval-pr-' + mi);
+  if (!el) return;
+  const datasets = ev.labels.map((lbl, i) => {
+    const pr = ev.pr_curves[lbl];
+    const points = pr.recall.map((r, j) => ({ x: r, y: pr.precision[j] }));
+    return { label: lbl + ' (AP=' + ((ev.ap_per_class[lbl]||0)*100).toFixed(1) + '%)', data: points,
+      borderColor: COLORS[i % COLORS.length], backgroundColor: 'transparent', pointRadius: 0, borderWidth: 1.5, tension: 0.1 };
+  });
+  const chart = new Chart(el, {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, showLine: true,
+      scales: { x: { title: { display: true, text: 'Recall', color: '#6c7086' }, min: 0, max: 1, ticks: { color: '#6c7086' }, grid: { color: '#31324422' } },
+                y: { title: { display: true, text: 'Precision', color: '#6c7086' }, min: 0, max: 1, ticks: { color: '#6c7086' }, grid: { color: '#31324422' } } },
+      plugins: { legend: { labels: { color: '#cdd6f4', font: { size: 10 } } } }
+    }
+  });
+  _evalCharts.push(chart);
+}
+
+function drawF1Chart(mi, ev) {
+  const el = document.getElementById('eval-f1-' + mi);
+  if (!el) return;
+  const datasets = ev.labels.map((lbl, i) => {
+    const fc = ev.f1_curves[lbl];
+    return { label: lbl, data: fc.confidence.map((c, j) => ({ x: c, y: fc.f1[j] })),
+      borderColor: COLORS[i % COLORS.length], backgroundColor: 'transparent', pointRadius: 0, borderWidth: 1.5, tension: 0.1 };
+  });
+  const chart = new Chart(el, {
+    type: 'scatter',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, showLine: true,
+      scales: { x: { title: { display: true, text: 'Confidence', color: '#6c7086' }, min: 0, max: 1, reverse: true, ticks: { color: '#6c7086' }, grid: { color: '#31324422' } },
+                y: { title: { display: true, text: 'F1', color: '#6c7086' }, min: 0, max: 1, ticks: { color: '#6c7086' }, grid: { color: '#31324422' } } },
+      plugins: { legend: { labels: { color: '#cdd6f4', font: { size: 10 } } } }
+    }
+  });
+  _evalCharts.push(chart);
+}
+
+function drawConfusionMatrix(mi, ev) {
+  const el = document.getElementById('eval-cm-' + mi);
+  if (!el) return;
+  const labels = [...ev.labels, 'BG'];
+  const matrix = ev.confusion_matrix;
+  const n = labels.length;
+  // Find max value for color scaling
+  let maxVal = 1;
+  matrix.forEach(row => row.forEach(v => { if (v > maxVal) maxVal = v; }));
+
+  const ctx2 = el.getContext('2d');
+  const pad = { top: 30, left: 70, right: 20, bottom: 60 };
+  const cellSize = Math.min(Math.floor((600 - pad.left - pad.right) / n), 50);
+  const W = pad.left + cellSize * n + pad.right;
+  const H = pad.top + cellSize * n + pad.bottom;
+  el.width = W; el.height = H;
+  el.style.width = W + 'px'; el.style.height = H + 'px';
+
+  // Draw cells
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const v = matrix[r]?.[c] || 0;
+      const intensity = v / maxVal;
+      const x = pad.left + c * cellSize;
+      const y = pad.top + r * cellSize;
+      // Color: diagonal=green, off-diagonal=red
+      if (r === c) {
+        ctx2.fillStyle = `rgba(166,227,161,${0.1 + intensity * 0.8})`;
+      } else {
+        ctx2.fillStyle = v > 0 ? `rgba(243,139,168,${0.15 + intensity * 0.7})` : 'rgba(49,50,68,0.3)';
+      }
+      ctx2.fillRect(x, y, cellSize, cellSize);
+      ctx2.strokeStyle = '#45475a';
+      ctx2.strokeRect(x, y, cellSize, cellSize);
+      // Value text
+      if (v > 0) {
+        ctx2.fillStyle = intensity > 0.5 ? '#1e1e2e' : '#cdd6f4';
+        ctx2.font = `${Math.max(9, cellSize * 0.35)}px sans-serif`;
+        ctx2.textAlign = 'center';
+        ctx2.textBaseline = 'middle';
+        ctx2.fillText(v, x + cellSize / 2, y + cellSize / 2);
+      }
+    }
+  }
+  // Row labels (GT)
+  ctx2.fillStyle = '#a6adc8';
+  ctx2.font = `${Math.max(9, cellSize * 0.3)}px sans-serif`;
+  ctx2.textAlign = 'right';
+  ctx2.textBaseline = 'middle';
+  for (let r = 0; r < n; r++) {
+    ctx2.fillText(labels[r], pad.left - 4, pad.top + r * cellSize + cellSize / 2);
+  }
+  // Column labels (Pred)
+  ctx2.textAlign = 'center';
+  ctx2.textBaseline = 'top';
+  for (let c = 0; c < n; c++) {
+    ctx2.save();
+    ctx2.translate(pad.left + c * cellSize + cellSize / 2, pad.top + n * cellSize + 4);
+    ctx2.rotate(Math.PI / 4);
+    ctx2.fillText(labels[c], 0, 0);
+    ctx2.restore();
+  }
+  // Axis titles
+  ctx2.fillStyle = '#6c7086';
+  ctx2.font = '11px sans-serif';
+  ctx2.textAlign = 'center';
+  ctx2.fillText('预测类别 (Predicted)', pad.left + cellSize * n / 2, H - 6);
+  ctx2.save();
+  ctx2.translate(12, pad.top + cellSize * n / 2);
+  ctx2.rotate(-Math.PI / 2);
+  ctx2.fillText('真实类别 (GT)', 0, 0);
+  ctx2.restore();
+}
+
+document.getElementById('eval-close').addEventListener('click', () => {
+  document.getElementById('eval-dialog').style.display = 'none';
+  _evalCharts.forEach(c => c.destroy());
+  _evalCharts = [];
+});
+
+// ============ SAM3 AI-assisted labeling ============
+const SAM3 = { active: false, pointMode: false, points: [] };
+
+document.getElementById('btn-sam3').addEventListener('click', async () => {
+  const bar = document.getElementById('sam3-bar');
+  if (SAM3.active) { closeSam3(); return; }
+  // Check availability
+  const status = document.getElementById('sam3-status');
+  status.textContent = '检查模型...';
+  bar.style.display = 'flex';
   try {
-    const r = await fetch('/api/compare/annotation/' + encodeURIComponent(name));
-    const data = await r.json();
-    if (data.ok) {
-      CMP.annA = data.a;
-      CMP.annB = data.b;
-      CMP.currentDiff = data.diff;
+    const r = await fetch('/api/sam3/status');
+    const d = await r.json();
+    if (!d.available) { status.textContent = '模型文件不存在'; return; }
+    status.textContent = d.loaded ? '已就绪' : '首次使用需加载模型';
+    SAM3.active = true;
+  } catch (e) { status.textContent = '连接失败'; }
+});
+
+function closeSam3() {
+  SAM3.active = false;
+  SAM3.pointMode = false;
+  SAM3.points = [];
+  document.getElementById('sam3-bar').style.display = 'none';
+  document.getElementById('sam3-point-btn').classList.remove('active');
+  canvas.style.cursor = S.tool === 'select' ? 'default' : 'crosshair';
+  draw();
+}
+document.getElementById('sam3-close').addEventListener('click', closeSam3);
+
+// Text prompt
+document.getElementById('sam3-run').addEventListener('click', sam3RunText);
+document.getElementById('sam3-text').addEventListener('keydown', e => {
+  if (e.key === 'Enter') sam3RunText();
+});
+
+async function sam3RunText() {
+  if (S.currentIdx < 0) return;
+  const text = document.getElementById('sam3-text').value.trim();
+  if (!text) { alert('请输入文本提示'); return; }
+  const btn = document.getElementById('sam3-run');
+  const status = document.getElementById('sam3-status');
+  btn.disabled = true;
+  status.textContent = '推理中...';
+  try {
+    const r = await fetch('/api/sam3/text', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        image: S.images[S.currentIdx], text,
+        show_masks: document.getElementById('sam3-mask').checked,
+        conf: 0.3,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) { alert(d.error); status.textContent = '失败'; return; }
+    sam3AddShapes(d.shapes);
+    status.textContent = `检测到 ${d.shapes.length} 个目标`;
+  } catch (e) { status.textContent = '请求失败'; }
+  finally { btn.disabled = false; }
+}
+
+// Batch inference
+document.getElementById('sam3-batch').addEventListener('click', sam3RunBatch);
+
+async function sam3RunBatch() {
+  const text = document.getElementById('sam3-text').value.trim();
+  if (!text) { alert('请输入文本提示'); return; }
+  // Use filtered images list
+  const imgs = S.filteredImages.map(i => S.images[i]);
+  if (imgs.length === 0) { alert('没有图片'); return; }
+  if (!confirm(`将对 ${imgs.length} 张图片进行批量推理\n文本: ${text}\n已有标注的图片将跳过\n\n继续？`)) return;
+
+  const btn = document.getElementById('sam3-batch');
+  const runBtn = document.getElementById('sam3-run');
+  const status = document.getElementById('sam3-status');
+  btn.disabled = true;
+  runBtn.disabled = true;
+  status.textContent = '批量推理中 0/' + imgs.length;
+
+  try {
+    const r = await fetch('/api/sam3/batch', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        text, images: imgs,
+        show_masks: document.getElementById('sam3-mask').checked,
+        conf: 0.3, skip_existing: true,
+      }),
+    });
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const msg = JSON.parse(line.slice(6));
+        if (msg.type === 'progress') {
+          status.textContent = `批量推理 ${msg.current + 1}/${msg.total}: ${msg.image}`;
+        } else if (msg.type === 'done') {
+          status.textContent = `完成: ${msg.done}/${msg.total} 张, 共 ${msg.objects} 个目标`;
+          // Reload current image annotation
+          await fetchLabels();
+          if (S.currentIdx >= 0) loadImage(S.currentIdx);
+        }
+      }
     }
-  } catch (e) {
-    CMP.currentDiff = null;
+  } catch (e) { status.textContent = '批量推理失败'; }
+  finally { btn.disabled = false; runBtn.disabled = false; }
+}
+
+// Point mode
+document.getElementById('sam3-point-btn').addEventListener('click', () => {
+  SAM3.pointMode = !SAM3.pointMode;
+  SAM3.points = [];
+  document.getElementById('sam3-point-btn').classList.toggle('active', SAM3.pointMode);
+  canvas.style.cursor = SAM3.pointMode ? 'crosshair' : (S.tool === 'select' ? 'default' : 'crosshair');
+  draw();
+});
+
+// Intercept canvas click for SAM3 point mode
+canvas.addEventListener('click', async (e) => {
+  if (!SAM3.active || !SAM3.pointMode) return;
+  if (S.panning || S.dragging || S.drawing) return;
+  const [ix, iy] = toImage(e.offsetX, e.offsetY);
+  if (ix < 0 || iy < 0 || ix > S.imgW || iy > S.imgH) return;
+
+  const positive = !e.shiftKey; // shift+click = negative point
+  SAM3.points.push({ x: ix, y: iy, positive });
+  draw(); // draw point markers
+
+  // Send to backend
+  const status = document.getElementById('sam3-status');
+  status.textContent = '推理中...';
+  try {
+    const r = await fetch('/api/sam3/point', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        image: S.images[S.currentIdx],
+        points: SAM3.points,
+        text: document.getElementById('sam3-text').value.trim(),
+        show_masks: document.getElementById('sam3-mask').checked,
+        conf: 0.3,
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) { status.textContent = d.error; return; }
+    // Show preview - replace previous SAM3 point results
+    SAM3._previewShapes = d.shapes;
+    status.textContent = `${d.shapes.length} 个目标 (Enter确认, Esc取消)`;
+    draw();
+  } catch (e) { status.textContent = '请求失败'; }
+}, true);
+
+// Confirm/cancel point results
+document.addEventListener('keydown', (e) => {
+  if (!SAM3.active || !SAM3.pointMode) return;
+  if (e.key === 'Enter' && SAM3._previewShapes?.length) {
+    sam3AddShapes(SAM3._previewShapes);
+    SAM3.points = [];
+    SAM3._previewShapes = null;
+    document.getElementById('sam3-status').textContent = '已添加';
+    draw();
+    e.preventDefault();
+  } else if (e.key === 'Escape' && SAM3.pointMode) {
+    SAM3.points = [];
+    SAM3._previewShapes = null;
+    document.getElementById('sam3-status').textContent = '已取消';
+    draw();
+    e.preventDefault();
   }
+});
+
+function sam3AddShapes(shapes) {
+  pushUndo();
+  for (const s of shapes) {
+    S.shapes.push(normalizeShape(s));
+  }
+  S.dirty = true;
+  renderShapeList();
+  updateEditor();
   draw();
 }
 
-// Replace loadImage globally
-loadImage = loadImageCompare;
-
-// Patch draw to overlay compare shapes
-const _origDraw = _draw;
-function _drawCompare() {
-  _origDraw();
-  if (!CMP.active || !CMP.currentDiff) return;
-  const diff = CMP.currentDiff;
-
-  // Draw A-only shapes (red dashed)
-  diff.a_only.forEach(s => drawCompareShape(s, '#f38ba8', [8, 4], 'A'));
-  // Draw B-only shapes (blue dashed)
-  diff.b_only.forEach(s => drawCompareShape(s, '#89b4fa', [8, 4], 'B'));
-  // Draw mismatched pairs
-  diff.mismatch.forEach(m => {
-    drawCompareShape(m.a, '#f38ba8', [6, 3], 'A:' + (m.a.label || ''));
-    drawCompareShape(m.b, '#89b4fa', [6, 3], 'B:' + (m.b.label || ''));
-  });
-}
-
-function drawCompareShape(s, color, dash, tag) {
-  const pts = s.points || [];
-  if (pts.length < 2) return;
-  ctx.save();
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  ctx.setLineDash(dash);
-
-  if (s.shape_type === 'rectangle' && pts.length >= 2) {
-    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-    const [x1, y1] = toCanvas(Math.min(...xs), Math.min(...ys));
-    const [x2, y2] = toCanvas(Math.max(...xs), Math.max(...ys));
-    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-    ctx.fillStyle = color + '20';
-    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-  } else {
-    ctx.beginPath();
-    const [sx, sy] = toCanvas(...pts[0]);
-    ctx.moveTo(sx, sy);
-    for (let j = 1; j < pts.length; j++) {
-      const [px, py] = toCanvas(...pts[j]);
-      ctx.lineTo(px, py);
+// Draw SAM3 point markers and preview shapes
+const _origDrawSam3 = _draw;
+function _drawWithSam3() {
+  _origDrawSam3();
+  if (!SAM3.active) return;
+  // Draw point markers
+  if (SAM3.pointMode && SAM3.points.length > 0) {
+    for (const pt of SAM3.points) {
+      const [cx, cy] = toCanvas(pt.x, pt.y);
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = pt.positive ? '#a6e3a1' : '#f38ba8';
+      ctx.fill();
+      ctx.strokeStyle = '#1e1e2e';
+      ctx.lineWidth = 2;
+      ctx.stroke();
     }
-    ctx.closePath();
-    ctx.fillStyle = color + '20';
-    ctx.fill();
-    ctx.stroke();
   }
-
-  // Tag label
-  if (tag && pts.length > 0) {
-    const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
-    const [lx, ly] = toCanvas(Math.min(...xs), Math.min(...ys));
-    const fontSize = Math.max(11, 13 * Math.min(S.scale, 2));
-    ctx.font = `bold ${fontSize}px sans-serif`;
-    ctx.setLineDash([]);
-    const tm = ctx.measureText(tag);
-    ctx.fillStyle = color + 'cc';
-    ctx.beginPath();
-    ctx.roundRect(lx, ly - fontSize - 6, tm.width + 8, fontSize + 4, 3);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.fillText(tag, lx + 4, ly - 5);
+  // Draw preview shapes
+  if (SAM3._previewShapes) {
+    for (const s of SAM3._previewShapes) {
+      const pts = s.points || [];
+      if (pts.length < 2) continue;
+      ctx.save();
+      ctx.strokeStyle = '#a6e3a1';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+      if (s.shape_type === 'rectangle') {
+        const [x1, y1] = toCanvas(pts[0][0], pts[0][1]);
+        const [x2, y2] = toCanvas(pts[1][0], pts[1][1]);
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        ctx.fillStyle = 'rgba(166,227,161,0.12)';
+        ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+      } else {
+        ctx.beginPath();
+        const [sx, sy] = toCanvas(pts[0][0], pts[0][1]);
+        ctx.moveTo(sx, sy);
+        for (let j = 1; j < pts.length; j++) {
+          const [px, py] = toCanvas(pts[j][0], pts[j][1]);
+          ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(166,227,161,0.15)';
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
   }
-  ctx.restore();
 }
-
-// Replace _draw
-_draw = _drawCompare;
-
-// Patch renderImageList to show diff markers
-const _origRenderImageList = renderImageList;
-renderImageList = function() {
-  _origRenderImageList();
-  if (!CMP.active) return;
-  const aSet = new Set(CMP.a_only_imgs);
-  const bSet = new Set(CMP.b_only_imgs);
-  const mSet = new Set(CMP.mismatch_imgs);
-  document.querySelectorAll('#img-list .item').forEach(el => {
-    const idx = parseInt(el.dataset.idx);
-    const name = S.images[idx];
-    if (mSet.has(name)) el.classList.add('diff-mismatch');
-    else if (aSet.has(name)) el.classList.add('diff-a-only');
-    else if (bSet.has(name)) el.classList.add('diff-b-only');
-    else el.classList.add('diff-both');
-  });
-};
+_draw = _drawWithSam3;
 
 // ============ Resize ============
 window.addEventListener('resize', () => {

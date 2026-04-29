@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Web Labeling - 图片标注系统</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -36,21 +37,16 @@
       <span class="sep"></span>
       <span id="img-resolution"></span>
     </div>
-    <div id="compare-bar" style="display:none">
-      <span id="compare-info"></span>
-      <div id="compare-filters">
-        <button class="cmp-filter active" data-filter="all">全部</button>
-        <button class="cmp-filter" data-filter="a_only">仅A检出 <span id="cmp-cnt-a">0</span></button>
-        <button class="cmp-filter" data-filter="b_only">仅B检出 <span id="cmp-cnt-b">0</span></button>
-        <button class="cmp-filter" data-filter="mismatch">类别不一致 <span id="cmp-cnt-m">0</span></button>
-        <button class="cmp-filter" data-filter="both">一致 <span id="cmp-cnt-ok">0</span></button>
-      </div>
-      <div id="compare-legend">
-        <span class="legend-a">■ 模型A</span>
-        <span class="legend-b">■ 模型B</span>
-      </div>
-      <button id="btn-compare-close" title="关闭对比">✕ 关闭对比</button>
+    <div id="sam3-bar" style="display:none">
+      <input id="sam3-text" type="text" placeholder="输入文本提示，如: person,car">
+      <button id="sam3-run" title="AI文本标注">🤖 AI标注</button>
+      <button id="sam3-batch" title="批量推理所有图片">📋 批量</button>
+      <button id="sam3-point-btn" title="点击标注模式" class="tool-btn">📍 点标注</button>
+      <label class="sam3-opt"><input id="sam3-mask" type="checkbox"> 多边形</label>
+      <span class="sam3-status" id="sam3-status"></span>
+      <button id="sam3-close" title="关闭SAM3">✕</button>
     </div>
+    <div id="compare-bar" style="display:none"></div>
     <div id="canvas-wrap">
       <canvas id="canvas"></canvas>
     </div>
@@ -84,7 +80,8 @@
       </div>
     </div>
     <div id="panel-actions">
-      <button id="btn-compare" title="模型对比">🔀 对比</button>
+      <button id="btn-sam3" title="SAM3 AI辅助标注">🤖 SAM3</button>
+      <button id="btn-compare" title="模型评估">📊 评估</button>
       <button id="btn-conflicts" title="检测冲突标注">⚠ 冲突</button>
       <button id="btn-analyze" title="标注统计分析">📊 分析</button>
     </div>
@@ -141,16 +138,16 @@
 <div id="compare-dialog" style="display:none">
   <div class="dialog-bg"></div>
   <div class="dialog-box compare-dialog-box">
-    <h3>模型对比设置</h3>
+    <h3>模型评估与对比</h3>
     <div class="cmp-section">
-      <label class="cmp-label">模型A 标注目录:</label>
+      <label class="cmp-label">GT (Ground Truth) 标注目录:</label>
       <div class="folder-path-row">
-        <input id="cmp-a-path" type="text" placeholder="模型A推理结果目录">
-        <button id="cmp-a-browse">浏览</button>
+        <input id="cmp-gt-path" type="text" placeholder="GT标注目录">
+        <button id="cmp-gt-browse">浏览</button>
       </div>
-      <div id="cmp-a-list"></div>
+      <div id="cmp-gt-list"></div>
       <label class="cmp-label">格式:</label>
-      <select id="cmp-a-format">
+      <select id="cmp-gt-format">
         <option value="auto">自动检测</option>
         <option value="json">X-AnyLabeling (JSON)</option>
         <option value="voc">VOC (XML)</option>
@@ -158,25 +155,39 @@
         <option value="yolo">YOLO (TXT)</option>
       </select>
     </div>
-    <div class="cmp-section">
-      <label class="cmp-label">模型B 标注目录:</label>
-      <div class="folder-path-row">
-        <input id="cmp-b-path" type="text" placeholder="模型B推理结果目录">
-        <button id="cmp-b-browse">浏览</button>
+    <div id="cmp-models-container">
+      <div class="cmp-model-entry" data-idx="0">
+        <label class="cmp-label">模型 1 标注目录:</label>
+        <div class="folder-path-row">
+          <input class="cmp-model-path" type="text" placeholder="模型推理结果目录">
+          <button class="cmp-model-browse">浏览</button>
+        </div>
+        <div class="cmp-model-list"></div>
+        <label class="cmp-label">格式:</label>
+        <select class="cmp-model-format">
+          <option value="auto">自动检测</option>
+          <option value="json">X-AnyLabeling (JSON)</option>
+          <option value="voc">VOC (XML)</option>
+          <option value="coco">COCO (JSON)</option>
+          <option value="yolo">YOLO (TXT)</option>
+        </select>
       </div>
-      <div id="cmp-b-list"></div>
-      <label class="cmp-label">格式:</label>
-      <select id="cmp-b-format">
-        <option value="auto">自动检测</option>
-        <option value="json">X-AnyLabeling (JSON)</option>
-        <option value="voc">VOC (XML)</option>
-        <option value="coco">COCO (JSON)</option>
-        <option value="yolo">YOLO (TXT)</option>
-      </select>
     </div>
+    <button id="cmp-add-model" style="margin-top:6px;padding:4px 12px;background:#313244;border:1px solid #45475a;border-radius:4px;color:#a6e3a1;cursor:pointer;font-size:12px;">+ 添加模型</button>
     <div class="dialog-btns">
-      <button id="cmp-start">开始对比</button>
+      <button id="cmp-start">开始评估</button>
       <button id="cmp-cancel">取消</button>
+    </div>
+  </div>
+</div>
+<!-- Evaluation results dialog -->
+<div id="eval-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box eval-dialog-box">
+    <h3>评估结果</h3>
+    <div id="eval-content"></div>
+    <div class="dialog-btns">
+      <button id="eval-close">关闭</button>
     </div>
   </div>
 </div>

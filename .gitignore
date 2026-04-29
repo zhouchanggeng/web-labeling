@@ -8,3 +8,4 @@ build/
 *.jpeg
 *.png
 data/
+models/
