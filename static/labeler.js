@@ -152,6 +152,7 @@ async function loadImage(idx) {
 
   renderShapeList();
   renderImageList();
+  setTool('select');
 }
 
 async function saveAnnotation() {
@@ -728,6 +729,7 @@ function promptLabel(cb) {
   function done(ok) {
     dlg.style.display = 'none';
     cleanup();
+    canvas.focus();
     if (ok && inp.value.trim()) cb(inp.value.trim());
   }
   function onKey(e) { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); }
