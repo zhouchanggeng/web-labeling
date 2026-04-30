@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Web Labeling - 图片标注系统</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
 <div id="app">
@@ -36,12 +37,23 @@
       <span class="sep"></span>
       <span id="img-resolution"></span>
     </div>
+    <div id="sam3-bar" style="display:none">
+      <input id="sam3-text" type="text" placeholder="输入文本提示，如: person,car">
+      <button id="sam3-run" title="AI文本标注">🤖 AI标注</button>
+      <button id="sam3-batch" title="批量推理所有图片">📋 批量</button>
+      <button id="sam3-point-btn" title="点击标注模式" class="tool-btn">📍 点标注</button>
+      <label class="sam3-opt"><input id="sam3-mask" type="checkbox"> 多边形</label>
+      <span class="sam3-status" id="sam3-status"></span>
+      <button id="sam3-close" title="关闭SAM3">✕</button>
+    </div>
+    <div id="compare-bar" style="display:none"></div>
     <div id="canvas-wrap">
-      <canvas id="canvas"></canvas>
+      <canvas id="canvas" tabindex="0"></canvas>
     </div>
   </div>
   <div id="right-panel">
-    <h3>标注列表</h3>
+    <h3>标注列表 <button id="btn-toggle-labels" title="显示/隐藏标签文字" style="float:right;background:none;border:none;color:#a6adc8;cursor:pointer;font-size:12px;padding:0 4px;margin-right:2px;">Aa</button><button id="btn-toggle-all-vis" title="显示/隐藏全部" style="float:right;background:none;border:none;color:#a6adc8;cursor:pointer;font-size:14px;padding:0 4px;">👁</button></h3>
+    <div id="mouse-coords">坐标: -</div>
     <div id="shape-list"></div>
     <div id="shape-editor" style="display:none">
       <h4>编辑标注</h4>
@@ -49,6 +61,29 @@
       <datalist id="label-suggestions"></datalist>
       <label>group_id: <input id="edit-group" type="text"></label>
       <div id="edit-flags"></div>
+    </div>
+    <div id="shortcuts-help">
+      <h4>快捷键</h4>
+      <div class="shortcut-list">
+        <div><kbd>A</kbd> 上一张</div>
+        <div><kbd>D</kbd> 下一张</div>
+        <div><kbd>V</kbd> 选择模式</div>
+        <div><kbd>R</kbd> 画矩形</div>
+        <div><kbd>P</kbd> 画多边形</div>
+        <div><kbd>F</kbd> 适应窗口</div>
+        <div><kbd>Del</kbd> 删除选中</div>
+        <div><kbd>Esc</kbd> 取消/取消选中</div>
+        <div><kbd>+/-</kbd> 缩放</div>
+        <div><kbd>Ctrl+S</kbd> 保存</div>
+        <div><kbd>Alt+拖拽</kbd> 平移画布</div>
+        <div><kbd>右键</kbd> 上下文菜单</div>
+      </div>
+    </div>
+    <div id="panel-actions">
+      <button id="btn-sam3" title="SAM3 AI辅助标注">🤖 SAM3</button>
+      <button id="btn-compare" title="模型评估">📊 评估</button>
+      <button id="btn-conflicts" title="检测冲突标注">⚠ 冲突</button>
+      <button id="btn-analyze" title="标注统计分析">📊 分析</button>
     </div>
   </div>
 </div>
@@ -58,6 +93,7 @@
   <div class="dialog-box">
     <h3>输入标签</h3>
     <input id="dialog-label" type="text" list="label-suggestions" placeholder="标签名称" autofocus>
+    <div id="dialog-label-picks"></div>
     <div class="dialog-btns">
       <button id="dialog-ok">确定</button>
       <button id="dialog-cancel">取消</button>
@@ -97,6 +133,82 @@
       <button id="folder-cancel">取消</button>
     </div>
   </div>
+</div>
+<!-- Compare setup dialog -->
+<div id="compare-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box compare-dialog-box">
+    <h3>模型评估与对比</h3>
+    <div class="cmp-section">
+      <label class="cmp-label">GT (Ground Truth) 标注目录:</label>
+      <div class="folder-path-row">
+        <input id="cmp-gt-path" type="text" placeholder="GT标注目录">
+        <button id="cmp-gt-browse">浏览</button>
+      </div>
+      <div id="cmp-gt-list"></div>
+      <label class="cmp-label">格式:</label>
+      <select id="cmp-gt-format">
+        <option value="auto">自动检测</option>
+        <option value="json">X-AnyLabeling (JSON)</option>
+        <option value="voc">VOC (XML)</option>
+        <option value="coco">COCO (JSON)</option>
+        <option value="yolo">YOLO (TXT)</option>
+      </select>
+    </div>
+    <div id="cmp-models-container">
+      <div class="cmp-model-entry" data-idx="0">
+        <label class="cmp-label">模型 1 标注目录:</label>
+        <div class="folder-path-row">
+          <input class="cmp-model-path" type="text" placeholder="模型推理结果目录">
+          <button class="cmp-model-browse">浏览</button>
+        </div>
+        <div class="cmp-model-list"></div>
+        <label class="cmp-label">格式:</label>
+        <select class="cmp-model-format">
+          <option value="auto">自动检测</option>
+          <option value="json">X-AnyLabeling (JSON)</option>
+          <option value="voc">VOC (XML)</option>
+          <option value="coco">COCO (JSON)</option>
+          <option value="yolo">YOLO (TXT)</option>
+        </select>
+      </div>
+    </div>
+    <button id="cmp-add-model" style="margin-top:6px;padding:4px 12px;background:#313244;border:1px solid #45475a;border-radius:4px;color:#a6e3a1;cursor:pointer;font-size:12px;">+ 添加模型</button>
+    <div class="dialog-btns">
+      <button id="cmp-start">开始评估</button>
+      <button id="cmp-cancel">取消</button>
+    </div>
+  </div>
+</div>
+<!-- Evaluation results dialog -->
+<div id="eval-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box eval-dialog-box">
+    <h3>评估结果</h3>
+    <div id="eval-content"></div>
+    <div class="dialog-btns">
+      <button id="eval-close">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- Analysis dialog -->
+<div id="analysis-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box analysis-dialog-box">
+    <h3>标注统计分析</h3>
+    <div id="analysis-content">加载中...</div>
+    <div class="dialog-btns">
+      <button id="analysis-close">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- Context menu -->
+<div id="context-menu" style="display:none">
+  <div class="ctx-item" data-action="change-label">✏️ 更改标签</div>
+  <div class="ctx-item" data-action="delete">🗑 删除</div>
+  <div class="ctx-item" data-action="duplicate">📋 复制</div>
+  <div class="ctx-item" data-action="to-front">⬆ 置顶</div>
+  <div class="ctx-item" data-action="to-back">⬇ 置底</div>
 </div>
 <script src="/static/labeler.js"></script>
 </body>
