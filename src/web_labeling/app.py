@@ -388,6 +388,111 @@ def _scan_labels():
     return _label_cache
 
 
+# ============ Writers (save back in original format) ============
+
+def _save_yolo(img_name, data):
+    """Save annotation back to YOLO .txt format."""
+    _load_yolo_classes()
+    # Build reverse map: label_name -> class_id
+    cls_to_id = {v: k for k, v in _yolo_classes.items()}
+    # Track new classes that need to be added
+    next_id = max(_yolo_classes.keys()) + 1 if _yolo_classes else 0
+
+    img_w = data.get("imageWidth", 0) or 1
+    img_h = data.get("imageHeight", 0) or 1
+    lines = []
+    for s in data.get("shapes", []):
+        label = s.get("label", "")
+        pts = s.get("points", [])
+        if len(pts) < 2 or not label:
+            continue
+        # Get or assign class id
+        if label not in cls_to_id:
+            cls_to_id[label] = next_id
+            _yolo_classes[next_id] = label
+            next_id += 1
+        cls_id = cls_to_id[label]
+        # Compute bounding box from points
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        x1, x2 = min(xs), max(xs)
+        y1, y2 = min(ys), max(ys)
+        # Convert to YOLO normalized format
+        cx = ((x1 + x2) / 2) / img_w
+        cy = ((y1 + y2) / 2) / img_h
+        bw = (x2 - x1) / img_w
+        bh = (y2 - y1) / img_h
+        lines.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}")
+
+    txt_path = _label_dir() / (Path(img_name).stem + ".txt")
+    txt_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(txt_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + ("\n" if lines else ""))
+
+    # Update classes.txt if new classes were added
+    cls_file = _label_dir() / "classes.txt"
+    max_id = max(_yolo_classes.keys()) if _yolo_classes else -1
+    cls_lines = [_yolo_classes.get(i, f"class_{i}") for i in range(max_id + 1)]
+    with open(cls_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(cls_lines) + "\n")
+
+
+def _save_voc(img_name, data):
+    """Save annotation back to VOC XML format."""
+    img_w = data.get("imageWidth", 0)
+    img_h = data.get("imageHeight", 0)
+
+    root = ET.Element("annotation")
+    ET.SubElement(root, "folder").text = ""
+    ET.SubElement(root, "filename").text = img_name
+    size = ET.SubElement(root, "size")
+    ET.SubElement(size, "width").text = str(img_w)
+    ET.SubElement(size, "height").text = str(img_h)
+    ET.SubElement(size, "depth").text = "3"
+
+    for s in data.get("shapes", []):
+        label = s.get("label", "")
+        pts = s.get("points", [])
+        if len(pts) < 2 or not label:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        obj = ET.SubElement(root, "object")
+        ET.SubElement(obj, "name").text = label
+        ET.SubElement(obj, "difficult").text = "1" if s.get("difficult") else "0"
+        bndbox = ET.SubElement(obj, "bndbox")
+        ET.SubElement(bndbox, "xmin").text = str(round(min(xs)))
+        ET.SubElement(bndbox, "ymin").text = str(round(min(ys)))
+        ET.SubElement(bndbox, "xmax").text = str(round(max(xs)))
+        ET.SubElement(bndbox, "ymax").text = str(round(max(ys)))
+
+    xml_path = _label_dir() / (Path(img_name).stem + ".xml")
+    xml_path.parent.mkdir(parents=True, exist_ok=True)
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    tree.write(xml_path, encoding="unicode", xml_declaration=True)
+
+
+def _save_json(img_name, data):
+    """Save annotation as X-AnyLabeling JSON format."""
+    jp = _label_dir() / (Path(img_name).stem + ".json")
+    jp.parent.mkdir(parents=True, exist_ok=True)
+    with open(jp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _save_annotation(img_name, data):
+    """Save annotation in the same format as the current source."""
+    fmt = _get_current_format()
+    if fmt == "yolo":
+        _save_yolo(img_name, data)
+    elif fmt == "voc":
+        _save_voc(img_name, data)
+    else:
+        # json and coco both save as per-image JSON
+        _save_json(img_name, data)
+
+
 # ============ Conflict detection ============
 
 def _find_conflicts_in_annotation(ann, iou_thresh=0.5):
@@ -479,10 +584,7 @@ def api_get_annotation(name):
 def api_save_annotation(name):
     global _label_cache
     data = request.get_json(force=True)
-    jp = _label_dir() / (Path(name).stem + ".json")
-    jp.parent.mkdir(parents=True, exist_ok=True)
-    with open(jp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    _save_annotation(name, data)
     _label_cache = None  # Invalidate label cache on save
     return jsonify({"ok": True})
 
@@ -531,10 +633,7 @@ def api_rotate(name):
             s["points"] = new_pts
         ann["imageWidth"] = new_w
         ann["imageHeight"] = new_h
-        jp = _label_dir() / (Path(name).stem + ".json")
-        jp.parent.mkdir(parents=True, exist_ok=True)
-        with open(jp, "w", encoding="utf-8") as f:
-            json.dump(ann, f, ensure_ascii=False, indent=2)
+        _save_annotation(name, ann)
         _label_cache = None
 
     return jsonify({"ok": True, "width": new_w, "height": new_h})
