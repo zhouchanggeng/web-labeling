@@ -1583,9 +1583,99 @@ def api_sam3_batch():
     return app.response_class(generate(), mimetype='text/event-stream')
 
 
+# ============ TensorBoard management ============
+_tb_process = None   # subprocess.Popen instance
+_tb_port = None      # port TensorBoard is running on
+_tb_logdir = None    # current logdir
+
+
+def _find_free_port():
+    """Find a free TCP port."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+
+
+@app.route("/api/tensorboard/status")
+def api_tb_status():
+    global _tb_process
+    running = _tb_process is not None and _tb_process.poll() is None
+    if not running and _tb_process is not None:
+        _tb_process = None
+    return jsonify({
+        "running": running,
+        "port": _tb_port if running else None,
+        "logdir": _tb_logdir if running else None,
+    })
+
+
+@app.route("/api/tensorboard/start", methods=["POST"])
+def api_tb_start():
+    global _tb_process, _tb_port, _tb_logdir
+    import subprocess, shutil
+
+    data = request.get_json(force=True)
+    logdir = data.get("logdir", "").strip()
+    if not logdir:
+        return jsonify({"ok": False, "error": "日志目录不能为空"}), 400
+    logdir = os.path.expanduser(logdir)
+    if not os.path.isdir(logdir):
+        return jsonify({"ok": False, "error": f"目录不存在: {logdir}"}), 400
+
+    # Check if tensorboard is installed
+    tb_bin = shutil.which("tensorboard")
+    if not tb_bin:
+        return jsonify({"ok": False, "error": "未找到 tensorboard 命令，请先安装: pip install tensorboard"}), 400
+
+    # Stop existing instance if running
+    if _tb_process and _tb_process.poll() is None:
+        _tb_process.terminate()
+        try:
+            _tb_process.wait(timeout=5)
+        except Exception:
+            _tb_process.kill()
+
+    port = _find_free_port()
+    try:
+        _tb_process = subprocess.Popen(
+            [tb_bin, "--logdir", logdir, "--port", str(port), "--bind_all", "--reload_interval", "15"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        _tb_port = port
+        _tb_logdir = logdir
+        return jsonify({"ok": True, "port": port, "logdir": logdir})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/tensorboard/stop", methods=["POST"])
+def api_tb_stop():
+    global _tb_process, _tb_port, _tb_logdir
+    if _tb_process and _tb_process.poll() is None:
+        _tb_process.terminate()
+        try:
+            _tb_process.wait(timeout=5)
+        except Exception:
+            _tb_process.kill()
+    _tb_process = None
+    _tb_port = None
+    _tb_logdir = None
+    return jsonify({"ok": True})
+
+
 def main():
     import argparse
+    import atexit
     global DATA_DIR, LABEL_DIR, LABEL_FORMAT
+
+    def _cleanup_tb():
+        global _tb_process
+        if _tb_process and _tb_process.poll() is None:
+            _tb_process.terminate()
+    atexit.register(_cleanup_tb)
+
     parser = argparse.ArgumentParser(description="Web Labeling Server")
     parser.add_argument("--data", default="./data", help="图片数据目录")
     parser.add_argument("--labels", default=None, help="标注文件目录（默认与图片目录相同）")

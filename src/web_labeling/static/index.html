@@ -84,6 +84,7 @@
       <button id="btn-compare" title="模型评估">📊 评估</button>
       <button id="btn-conflicts" title="检测冲突标注">⚠ 冲突</button>
       <button id="btn-analyze" title="标注统计分析">📊 分析</button>
+      <button id="btn-tensorboard" title="TensorBoard 训练监控">📈 训练</button>
     </div>
   </div>
 </div>
@@ -209,6 +210,42 @@
   <div class="ctx-item" data-action="duplicate">📋 复制</div>
   <div class="ctx-item" data-action="to-front">⬆ 置顶</div>
   <div class="ctx-item" data-action="to-back">⬇ 置底</div>
+</div>
+<!-- TensorBoard dialog -->
+<div id="tb-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box tb-dialog-box">
+    <h3>📈 TensorBoard 训练监控</h3>
+    <div id="tb-status-section">
+      <div id="tb-running-info" style="display:none">
+        <div class="tb-status-row">
+          <span class="tb-status-dot running"></span>
+          <span>TensorBoard 运行中</span>
+          <button id="tb-open" class="tb-action-btn">🔗 打开面板</button>
+          <button id="tb-stop" class="tb-action-btn tb-stop-btn">⏹ 停止</button>
+        </div>
+        <div id="tb-running-path" class="tb-path-info"></div>
+      </div>
+      <div id="tb-stopped-info">
+        <div class="tb-status-row">
+          <span class="tb-status-dot stopped"></span>
+          <span>TensorBoard 未运行</span>
+        </div>
+      </div>
+    </div>
+    <div class="folder-section" style="margin-top:10px">
+      <label class="folder-label">TensorBoard 日志目录:</label>
+      <div class="folder-path-row">
+        <input id="tb-path-input" type="text" placeholder="选择包含 events.out.tfevents 的目录">
+        <button id="tb-browse">浏览</button>
+      </div>
+      <div id="tb-dir-list"></div>
+    </div>
+    <div class="dialog-btns">
+      <button id="tb-start">🚀 启动 TensorBoard</button>
+      <button id="tb-dialog-close">关闭</button>
+    </div>
+  </div>
 </div>
 <script src="/static/labeler.js"></script>
 </body>

@@ -1975,6 +1975,108 @@ window.addEventListener('resize', () => {
   if (S.img) { fitView(); } else { resizeCanvas(); }
 });
 
+// ============ TensorBoard ============
+document.getElementById('btn-tensorboard').addEventListener('click', async () => {
+  const dlg = document.getElementById('tb-dialog');
+  dlg.style.display = 'block';
+  await _tbRefreshStatus();
+});
+
+document.getElementById('tb-dialog-close').addEventListener('click', () => {
+  document.getElementById('tb-dialog').style.display = 'none';
+});
+
+document.getElementById('tb-browse').addEventListener('click', () => {
+  const path = document.getElementById('tb-path-input').value || '~';
+  _tbBrowseTo(path);
+});
+document.getElementById('tb-path-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') _tbBrowseTo(e.target.value);
+});
+
+async function _tbBrowseTo(dirPath) {
+  const r = await fetch('/api/browse?path=' + encodeURIComponent(dirPath));
+  const data = await r.json();
+  document.getElementById('tb-path-input').value = data.path;
+  const list = document.getElementById('tb-dir-list');
+  if (data.error) {
+    list.innerHTML = `<div class="folder-error">${data.error}</div>`;
+    return;
+  }
+  const paths = [data.path + '/..'];
+  let html = `<div class="folder-item" data-path="${data.path}/..">📁 ..</div>`;
+  data.dirs.forEach(d => {
+    const full = data.path + '/' + d.name;
+    html += `<div class="folder-item" data-path="${full}">📁 ${d.name}</div>`;
+  });
+  list.innerHTML = html;
+  list.querySelectorAll('.folder-item').forEach(el => {
+    el.addEventListener('click', () => _tbBrowseTo(el.dataset.path));
+  });
+}
+
+document.getElementById('tb-start').addEventListener('click', async () => {
+  const logdir = document.getElementById('tb-path-input').value.trim();
+  if (!logdir) { alert('请选择日志目录'); return; }
+  const btn = document.getElementById('tb-start');
+  btn.disabled = true;
+  btn.textContent = '启动中...';
+  try {
+    const r = await fetch('/api/tensorboard/start', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ logdir }),
+    });
+    const data = await r.json();
+    if (!data.ok) {
+      alert(data.error || '启动失败');
+      return;
+    }
+    await _tbRefreshStatus();
+    // Auto-open in new tab after a short delay for TensorBoard to initialize
+    setTimeout(() => {
+      const host = location.hostname;
+      window.open(`http://${host}:${data.port}`, '_blank');
+    }, 2000);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🚀 启动 TensorBoard';
+  }
+});
+
+document.getElementById('tb-stop').addEventListener('click', async () => {
+  await fetch('/api/tensorboard/stop', { method: 'POST' });
+  await _tbRefreshStatus();
+});
+
+document.getElementById('tb-open').addEventListener('click', () => {
+  if (_tbCurrentPort) {
+    const host = location.hostname;
+    window.open(`http://${host}:${_tbCurrentPort}`, '_blank');
+  }
+});
+
+let _tbCurrentPort = null;
+
+async function _tbRefreshStatus() {
+  const r = await fetch('/api/tensorboard/status');
+  const data = await r.json();
+  _tbCurrentPort = data.port;
+  const runInfo = document.getElementById('tb-running-info');
+  const stopInfo = document.getElementById('tb-stopped-info');
+  if (data.running) {
+    runInfo.style.display = 'block';
+    stopInfo.style.display = 'none';
+    document.getElementById('tb-running-path').textContent = `目录: ${data.logdir} | 端口: ${data.port}`;
+    if (!document.getElementById('tb-path-input').value) {
+      document.getElementById('tb-path-input').value = data.logdir;
+    }
+  } else {
+    runInfo.style.display = 'none';
+    stopInfo.style.display = 'block';
+  }
+}
+
 // ============ Init ============
 (async () => {
   await fetchImages();

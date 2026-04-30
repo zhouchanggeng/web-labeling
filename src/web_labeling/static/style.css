@@ -193,3 +193,15 @@ kbd { background:#313244; border:1px solid #45475a; border-radius:3px; padding:1
 .cmp-prog-text { font-size:12px; color:#a6adc8; margin-bottom:4px; }
 .cmp-prog-bar-wrap { height:6px; background:#313244; border-radius:3px; overflow:hidden; }
 .cmp-prog-bar { height:100%; background:#a6e3a1; border-radius:3px; transition:width 0.3s; width:0; }
+
+/* TensorBoard dialog */
+.tb-dialog-box { min-width:500px; max-width:620px; }
+.tb-status-row { display:flex; align-items:center; gap:8px; padding:8px 0; }
+.tb-status-dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+.tb-status-dot.running { background:#a6e3a1; box-shadow:0 0 6px #a6e3a1; }
+.tb-status-dot.stopped { background:#6c7086; }
+.tb-action-btn { padding:4px 12px; background:#313244; border:1px solid #45475a; border-radius:4px; color:#cdd6f4; cursor:pointer; font-size:12px; }
+.tb-action-btn:hover { background:#45475a; }
+.tb-stop-btn { color:#f38ba8; border-color:#f38ba8; }
+.tb-stop-btn:hover { background:#f38ba8; color:#1e1e2e; }
+.tb-path-info { font-size:12px; color:#6c7086; padding:2px 0 6px 18px; word-break:break-all; }
