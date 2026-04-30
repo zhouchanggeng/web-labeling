@@ -246,12 +246,8 @@ def _read_coco(img_name):
 
 def _load_yolo_classes():
     global _yolo_classes
-    if _yolo_classes:
-        return
-    cls_file = _label_dir() / "classes.txt"
-    if cls_file.exists():
-        with open(cls_file, "r", encoding="utf-8") as f:
-            _yolo_classes = {i: line.strip() for i, line in enumerate(f) if line.strip()}
+    # 不读取 classes.txt，直接用数字 ID 作为标签名，避免映射错误
+    _yolo_classes = {}
 
 
 def _read_yolo(img_name):
@@ -391,13 +387,7 @@ def _scan_labels():
 # ============ Writers (save back in original format) ============
 
 def _save_yolo(img_name, data):
-    """Save annotation back to YOLO .txt format."""
-    _load_yolo_classes()
-    # Build reverse map: label_name -> class_id
-    cls_to_id = {v: k for k, v in _yolo_classes.items()}
-    # Track new classes that need to be added
-    next_id = max(_yolo_classes.keys()) + 1 if _yolo_classes else 0
-
+    """Save annotation back to YOLO .txt format. Label is used directly as class ID (must be numeric)."""
     img_w = data.get("imageWidth", 0) or 1
     img_h = data.get("imageHeight", 0) or 1
     lines = []
@@ -406,12 +396,11 @@ def _save_yolo(img_name, data):
         pts = s.get("points", [])
         if len(pts) < 2 or not label:
             continue
-        # Get or assign class id
-        if label not in cls_to_id:
-            cls_to_id[label] = next_id
-            _yolo_classes[next_id] = label
-            next_id += 1
-        cls_id = cls_to_id[label]
+        # Label should be the numeric class ID directly
+        try:
+            cls_id = int(label)
+        except ValueError:
+            cls_id = 0  # fallback
         # Compute bounding box from points
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
@@ -428,13 +417,6 @@ def _save_yolo(img_name, data):
     txt_path.parent.mkdir(parents=True, exist_ok=True)
     with open(txt_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + ("\n" if lines else ""))
-
-    # Update classes.txt if new classes were added
-    cls_file = _label_dir() / "classes.txt"
-    max_id = max(_yolo_classes.keys()) if _yolo_classes else -1
-    cls_lines = [_yolo_classes.get(i, f"class_{i}") for i in range(max_id + 1)]
-    with open(cls_file, "w", encoding="utf-8") as f:
-        f.write("\n".join(cls_lines) + "\n")
 
 
 def _save_voc(img_name, data):
