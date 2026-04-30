@@ -1565,6 +1565,67 @@ def api_sam3_batch():
     return app.response_class(generate(), mimetype='text/event-stream')
 
 
+# ============ Confirm sample (copy to verified dir) ============
+
+_confirm_dir = None  # output directory for confirmed samples
+
+
+@app.route("/api/confirm_path", methods=["GET"])
+def api_get_confirm_path():
+    return jsonify({"path": _confirm_dir or ""})
+
+
+@app.route("/api/confirm_path", methods=["POST"])
+def api_set_confirm_path():
+    global _confirm_dir
+    data = request.get_json(force=True)
+    p = data.get("path", "").strip()
+    if p:
+        expanded = os.path.expanduser(p)
+        os.makedirs(expanded, exist_ok=True)
+        _confirm_dir = expanded
+    else:
+        _confirm_dir = None
+    return jsonify({"ok": True, "path": _confirm_dir or ""})
+
+
+@app.route("/api/confirm/<path:name>", methods=["POST"])
+def api_confirm_sample(name):
+    """Copy image + annotation to the confirmed output directory."""
+    import shutil
+    if not _confirm_dir:
+        return jsonify({"ok": False, "error": "未设置确认输出目录"}), 400
+
+    os.makedirs(_confirm_dir, exist_ok=True)
+    img_labels_dir = os.path.join(_confirm_dir, "labels")
+    img_images_dir = os.path.join(_confirm_dir, "images")
+    os.makedirs(img_labels_dir, exist_ok=True)
+    os.makedirs(img_images_dir, exist_ok=True)
+
+    # Copy image
+    src_img = _img_dir() / name
+    if src_img.exists():
+        shutil.copy2(str(src_img), os.path.join(img_images_dir, name))
+
+    # Copy annotation in current format
+    fmt = _get_current_format()
+    stem = Path(name).stem
+    if fmt == "yolo":
+        src_ann = _label_dir() / (stem + ".txt")
+        if src_ann.exists():
+            shutil.copy2(str(src_ann), os.path.join(img_labels_dir, stem + ".txt"))
+    elif fmt == "voc":
+        src_ann = _label_dir() / (stem + ".xml")
+        if src_ann.exists():
+            shutil.copy2(str(src_ann), os.path.join(img_labels_dir, stem + ".xml"))
+    else:
+        src_ann = _label_dir() / (stem + ".json")
+        if src_ann.exists():
+            shutil.copy2(str(src_ann), os.path.join(img_labels_dir, stem + ".json"))
+
+    return jsonify({"ok": True})
+
+
 # ============ Classification tag definitions ============
 
 _classify_tags_file = None  # resolved path, set in main() or lazily

@@ -1976,6 +1976,121 @@ window.addEventListener('resize', () => {
   if (S.img) { fitView(); } else { resizeCanvas(); }
 });
 
+// ============ Confirm sample ============
+let _confirmPath = '';
+
+async function loadConfirmPath() {
+  try {
+    const r = await fetch('/api/confirm_path');
+    const data = await r.json();
+    _confirmPath = data.path || '';
+  } catch(e) { _confirmPath = ''; }
+  _updateConfirmBtn();
+}
+
+function _updateConfirmBtn() {
+  const btn = document.getElementById('btn-confirm');
+  if (!_confirmPath) {
+    btn.title = '确认样本（未设置输出目录，请先在右侧面板设置）';
+    btn.style.opacity = '0.5';
+  } else {
+    btn.title = '确认样本并拷贝到: ' + _confirmPath;
+    btn.style.opacity = '1';
+  }
+  btn.classList.remove('confirmed');
+}
+
+document.getElementById('btn-confirm').addEventListener('click', async () => {
+  if (S.currentIdx < 0) return;
+  if (!_confirmPath) {
+    alert('请先设置确认样本输出目录（右侧面板「📁 确认路径」按钮）');
+    return;
+  }
+  // Save first if dirty
+  if (S.dirty) await saveAnnotation();
+  const name = S.images[S.currentIdx];
+  const btn = document.getElementById('btn-confirm');
+  btn.disabled = true;
+  btn.textContent = '拷贝中...';
+  try {
+    const r = await fetch('/api/confirm/' + encodeURIComponent(name), { method: 'POST' });
+    const data = await r.json();
+    if (data.ok) {
+      btn.classList.add('confirmed');
+      btn.textContent = '✅ 已确认';
+      // Auto advance to next image after a short delay
+      setTimeout(() => {
+        btn.classList.remove('confirmed');
+        btn.textContent = '✅ 确认';
+        navFiltered(1);
+      }, 500);
+    } else {
+      alert(data.error || '确认失败');
+    }
+  } finally {
+    btn.disabled = false;
+    if (!btn.classList.contains('confirmed')) btn.textContent = '✅ 确认';
+  }
+});
+
+// Confirm path settings dialog
+document.getElementById('btn-confirm-settings').addEventListener('click', async () => {
+  const dlg = document.getElementById('confirm-path-dialog');
+  dlg.style.display = 'block';
+  document.getElementById('confirm-path-input').value = _confirmPath;
+});
+
+document.getElementById('confirm-path-browse').addEventListener('click', () => {
+  const path = document.getElementById('confirm-path-input').value || '~';
+  _confirmBrowseTo(path);
+});
+document.getElementById('confirm-path-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') _confirmBrowseTo(e.target.value);
+});
+
+async function _confirmBrowseTo(dirPath) {
+  const r = await fetch('/api/browse?path=' + encodeURIComponent(dirPath));
+  const data = await r.json();
+  document.getElementById('confirm-path-input').value = data.path;
+  const list = document.getElementById('confirm-path-list');
+  if (data.error) { list.innerHTML = `<div class="folder-error">${data.error}</div>`; return; }
+  const paths = [data.path + '/..'];
+  let html = `<div class="folder-item" data-path="${data.path}/..">📁 ..</div>`;
+  data.dirs.forEach(d => {
+    const full = data.path + '/' + d.name;
+    html += `<div class="folder-item" data-path="${full}">📁 ${d.name}</div>`;
+  });
+  list.innerHTML = html;
+  list.querySelectorAll('.folder-item').forEach(el => {
+    el.addEventListener('click', () => _confirmBrowseTo(el.dataset.path));
+  });
+}
+
+document.getElementById('confirm-path-save').addEventListener('click', async () => {
+  const path = document.getElementById('confirm-path-input').value.trim();
+  await fetch('/api/confirm_path', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ path }),
+  });
+  _confirmPath = path;
+  _updateConfirmBtn();
+  document.getElementById('confirm-path-dialog').style.display = 'none';
+});
+
+document.getElementById('confirm-path-clear').addEventListener('click', async () => {
+  await fetch('/api/confirm_path', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ path: '' }),
+  });
+  _confirmPath = '';
+  _updateConfirmBtn();
+  document.getElementById('confirm-path-dialog').style.display = 'none';
+});
+
+document.getElementById('confirm-path-cancel').addEventListener('click', () => {
+  document.getElementById('confirm-path-dialog').style.display = 'none';
+});
+
 // ============ Image classification tags ============
 let _classifyTags = []; // available tag names
 
@@ -2141,6 +2256,7 @@ async function _tbRefreshStatus() {
   await fetchImages();
   await fetchLabels();
   await loadClassifyTags();
+  await loadConfirmPath();
   resizeCanvas();
   if (S.images.length > 0) loadImage(0);
 })();

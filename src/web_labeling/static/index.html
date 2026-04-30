@@ -30,6 +30,7 @@
       <span class="sep"></span>
       <button id="btn-delete" title="删除选中 (Del)">🗑 删除</button>
       <button id="btn-save" title="保存 (Ctrl+S)">💾 保存</button>
+      <button id="btn-confirm" title="确认样本并拷贝到已确认目录">✅ 确认</button>
       <span class="sep"></span>
       <button id="btn-zoomin" title="放大 (+)">🔍+</button>
       <button id="btn-zoomout" title="缩小 (-)">🔍-</button>
@@ -89,6 +90,7 @@
       <button id="btn-conflicts" title="检测冲突标注">⚠ 冲突</button>
       <button id="btn-analyze" title="标注统计分析">📊 分析</button>
       <button id="btn-tensorboard" title="TensorBoard 训练监控">📈 训练</button>
+      <button id="btn-confirm-settings" title="设置确认样本输出目录">📁 确认路径</button>
     </div>
   </div>
 </div>
@@ -204,6 +206,24 @@
     <div id="analysis-content">加载中...</div>
     <div class="dialog-btns">
       <button id="analysis-close">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- Confirm output path dialog -->
+<div id="confirm-path-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box confirm-path-dialog-box">
+    <h3>设置确认样本输出目录</h3>
+    <p style="font-size:12px;color:#a6adc8;margin-bottom:8px;">确认的图片和标注将拷贝到此目录（保持原文件名）</p>
+    <div class="folder-path-row">
+      <input id="confirm-path-input" type="text" placeholder="输出目录路径">
+      <button id="confirm-path-browse">浏览</button>
+    </div>
+    <div id="confirm-path-list"></div>
+    <div class="dialog-btns">
+      <button id="confirm-path-save">确定</button>
+      <button id="confirm-path-clear" style="background:#45475a;color:#f38ba8;">清除路径</button>
+      <button id="confirm-path-cancel">取消</button>
     </div>
   </div>
 </div>

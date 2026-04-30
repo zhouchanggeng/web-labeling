@@ -216,3 +216,9 @@ kbd { background:#313244; border:1px solid #45475a; border-radius:3px; padding:1
 .cls-tag.active { background:var(--tag-color,#89b4fa); color:#1e1e2e; border-color:var(--tag-color,#89b4fa); font-weight:600; }
 .classify-dialog-box { min-width:360px; }
 .classify-dialog-box textarea { width:100%; padding:8px; background:#313244; border:1px solid #45475a; border-radius:4px; color:#cdd6f4; font-size:13px; resize:vertical; font-family:inherit; }
+
+/* Confirm button */
+#btn-confirm { background:#313244; border:1px solid #a6e3a1; color:#a6e3a1; }
+#btn-confirm:hover { background:#a6e3a1; color:#1e1e2e; }
+#btn-confirm.confirmed { background:#a6e3a1; color:#1e1e2e; font-weight:600; }
+.confirm-path-dialog-box { min-width:480px; max-width:600px; }
