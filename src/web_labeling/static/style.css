@@ -11,8 +11,8 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background:#1
 .label-tag { padding:2px 8px; border-radius:10px; font-size:11px; cursor:pointer; background:#313244; color:#cdd6f4; border:1px solid transparent; white-space:nowrap; transition: background .15s; }
 .label-tag:hover { background:#45475a; }
 .label-tag.active { background:var(--tag-color); color:#1e1e2e; font-weight:600; border-color:var(--tag-color); }
-#img-list { flex:1; overflow-y:auto; }
-#img-list .item { padding:6px 12px; cursor:pointer; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid #11111b; }
+#img-list { flex:1; overflow-y:auto; position:relative; }
+#img-list .item { padding:6px 12px; cursor:pointer; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; border-bottom:1px solid #11111b; line-height:18px; }
 #img-list .item:hover { background:#313244; }
 #img-list .item.active { background:#89b4fa; color:#1e1e2e; font-weight:600; }
 #img-list .item.has-ann::after { content:" ✓"; color:#a6e3a1; }

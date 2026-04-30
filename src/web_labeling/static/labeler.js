@@ -20,7 +20,9 @@ const S = {
   // Label filter
   labelMap: {},        // {label: [img_name, ...]}
   filterLabel: null,   // active label filter, null = show all
-  filteredImages: [],   // indices into S.images matching filter
+  // Lazy loading
+  totalImages: 0,      // total count from server (with current filter/search)
+  loadingMore: false,   // currently fetching a page
   // Display options
   showLabels: true,     // whether to show label text on shapes
 };
@@ -53,11 +55,43 @@ const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d');
 const wrap = document.getElementById('canvas-wrap');
 
-// ============ API ============
-async function fetchImages() {
-  const r = await fetch('/api/images');
-  S.images = await r.json();
-  updateFilteredImages();
+// ============ API (lazy loading) ============
+const PAGE_SIZE = 200;
+
+async function fetchImages(reset = true) {
+  if (reset) {
+    S.images = [];
+    S.totalImages = 0;
+    S.currentIdx = -1;
+  }
+  await _loadImagePage(0);
+  renderImageList();
+}
+
+async function _loadImagePage(offset) {
+  if (S.loadingMore) return;
+  S.loadingMore = true;
+  try {
+    const params = new URLSearchParams({ offset, limit: PAGE_SIZE });
+    const search = document.getElementById('search').value.trim();
+    if (search) params.set('search', search);
+    if (S.filterLabel) params.set('label', S.filterLabel);
+    const r = await fetch('/api/images?' + params);
+    const data = await r.json();
+    S.totalImages = data.total;
+    if (data.offset === 0) {
+      S.images = data.images;
+    } else if (data.offset === S.images.length) {
+      S.images.push(...data.images);
+    }
+  } finally {
+    S.loadingMore = false;
+  }
+}
+
+async function _loadMoreIfNeeded() {
+  if (S.loadingMore || S.images.length >= S.totalImages) return;
+  await _loadImagePage(S.images.length);
   renderImageList();
 }
 
@@ -67,24 +101,11 @@ async function fetchLabels() {
   renderLabelFilter();
 }
 
-function updateFilteredImages() {
-  if (!S.filterLabel) {
-    S.filteredImages = S.images.map((_, i) => i);
-  } else {
-    const allowed = new Set(S.labelMap[S.filterLabel] || []);
-    S.filteredImages = S.images.map((name, i) => ({ name, i }))
-      .filter(x => allowed.has(x.name))
-      .map(x => x.i);
-  }
-}
-
 async function setLabelFilter(label) {
   S.filterLabel = S.filterLabel === label ? null : label;
-  // Re-fetch labels to get up-to-date counts
   await fetchLabels();
-  updateFilteredImages();
   renderLabelFilter();
-  renderImageList();
+  fetchImages();
 }
 
 function renderLabelFilter() {
@@ -99,6 +120,29 @@ function renderLabelFilter() {
   container.querySelectorAll('.label-tag').forEach(el => {
     el.addEventListener('click', () => setLabelFilter(el.dataset.label));
   });
+}
+
+// ============ Image preload cache ============
+const _preloadCache = new Map();
+const PRELOAD_MAX = 10;
+
+function _preloadAdjacent(idx) {
+  const toPreload = [1, 2, -1].map(d => idx + d)
+    .filter(p => p >= 0 && p < S.images.length)
+    .map(p => S.images[p]);
+  for (const name of toPreload) {
+    if (_preloadCache.has(name)) continue;
+    const img = new window.Image();
+    img.src = '/api/image/' + encodeURIComponent(name);
+    _preloadCache.set(name, img);
+  }
+  if (_preloadCache.size > PRELOAD_MAX) {
+    const keep = new Set(toPreload);
+    if (idx < S.images.length) keep.add(S.images[idx]);
+    for (const [k] of _preloadCache) {
+      if (!keep.has(k)) { _preloadCache.delete(k); if (_preloadCache.size <= PRELOAD_MAX) break; }
+    }
+  }
 }
 
 async function loadImage(idx) {
@@ -121,14 +165,20 @@ async function loadImage(idx) {
   document.getElementById('img-resolution').textContent = '';
   draw();
 
+  // Use preloaded image if available
+  const preloaded = _preloadCache.get(name);
+
   // Load image and annotation in parallel
   const [img, ann] = await Promise.all([
-    new Promise((resolve) => {
-      const image = new window.Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => resolve(null);
-      image.src = '/api/image/' + encodeURIComponent(name);
-    }),
+    preloaded && preloaded.complete && preloaded.naturalWidth > 0
+      ? Promise.resolve(preloaded)
+      : new Promise((resolve) => {
+          const image = preloaded || new window.Image();
+          if (image.complete && image.naturalWidth > 0) { resolve(image); return; }
+          image.onload = () => resolve(image);
+          image.onerror = () => resolve(null);
+          if (!preloaded) image.src = '/api/image/' + encodeURIComponent(name);
+        }),
     fetch('/api/annotation/' + encodeURIComponent(name)).then(r => r.json()),
   ]);
 
@@ -152,6 +202,9 @@ async function loadImage(idx) {
 
   renderShapeList();
   renderImageList();
+
+  // Preload adjacent images
+  _preloadAdjacent(idx);
   setTool('select');
 }
 
@@ -761,23 +814,80 @@ function updateLabelSuggestions() {
 }
 
 // ============ UI rendering ============
+// ============ Virtual scroll for image list ============
+const VITEM_H = 30;
+
 function renderImageList() {
   const list = document.getElementById('img-list');
-  const search = document.getElementById('search').value.toLowerCase();
-  const filtered = S.filteredImages
-    .map(i => ({ name: S.images[i], i }))
-    .filter(x => x.name.toLowerCase().includes(search));
-  list.innerHTML = filtered.map(({ name, i }) =>
-    `<div class="item${i === S.currentIdx ? ' active' : ''}${hasAnnotation(name) ? ' has-ann' : ''}" data-idx="${i}">${name}</div>`
-  ).join('');
-  list.querySelectorAll('.item').forEach(el => {
-    el.addEventListener('click', () => loadImage(parseInt(el.dataset.idx)));
-  });
-  const total = S.filteredImages.length;
-  const pos = S.currentIdx >= 0 ? S.filteredImages.indexOf(S.currentIdx) + 1 : 0;
+  const totalH = S.totalImages * VITEM_H;
+  list.innerHTML = '';
+  let spacer = list._vspacer;
+  if (!spacer) {
+    spacer = document.createElement('div');
+    spacer.style.cssText = 'width:1px;pointer-events:none;';
+    list._vspacer = spacer;
+  }
+  spacer.style.height = totalH + 'px';
+  list.appendChild(spacer);
+  _renderVisibleSlice(list);
+
+  const pos = S.currentIdx >= 0 ? S.currentIdx + 1 : 0;
   const filterInfo = S.filterLabel ? ` [${S.filterLabel}]` : '';
-  document.getElementById('img-counter').textContent = `${pos} / ${total}${filterInfo}`;
+  document.getElementById('img-counter').textContent = `${pos} / ${S.totalImages}${filterInfo}`;
+
+  // Scroll active item into view
+  if (S.currentIdx >= 0 && S.currentIdx < S.images.length) {
+    const itemTop = S.currentIdx * VITEM_H;
+    const listH = list.clientHeight;
+    if (itemTop < list.scrollTop || itemTop + VITEM_H > list.scrollTop + listH) {
+      list.scrollTop = itemTop - listH / 2 + VITEM_H / 2;
+    }
+  }
 }
+
+function _renderVisibleSlice(list) {
+  if (!list) list = document.getElementById('img-list');
+  const old = list.querySelectorAll('.vitem');
+  old.forEach(el => el.remove());
+
+  const scrollTop = list.scrollTop;
+  const listH = list.clientHeight;
+  const overscan = 10;
+  const startIdx = Math.max(0, Math.floor(scrollTop / VITEM_H) - overscan);
+  const endIdx = Math.min(S.images.length, Math.ceil((scrollTop + listH) / VITEM_H) + overscan);
+
+  const frag = document.createDocumentFragment();
+  for (let vi = startIdx; vi < endIdx; vi++) {
+    const name = S.images[vi];
+    const div = document.createElement('div');
+    div.className = 'vitem item' + (vi === S.currentIdx ? ' active' : '') + (hasAnnotation(name) ? ' has-ann' : '');
+    div.dataset.idx = vi;
+    div.textContent = name;
+    div.style.cssText = `position:absolute;top:${vi * VITEM_H}px;left:0;right:0;height:${VITEM_H}px;`;
+    div.addEventListener('click', () => loadImage(vi));
+    frag.appendChild(div);
+  }
+
+  if (S.images.length < S.totalImages && endIdx >= S.images.length) {
+    const ld = document.createElement('div');
+    ld.className = 'vitem';
+    ld.textContent = '加载中...';
+    ld.style.cssText = `position:absolute;top:${S.images.length * VITEM_H}px;left:0;right:0;height:${VITEM_H}px;color:#6c7086;padding:6px 12px;font-size:13px;`;
+    frag.appendChild(ld);
+  }
+  list.appendChild(frag);
+
+  // Trigger lazy load when near the loaded boundary
+  const viewBottom = scrollTop + listH;
+  const loadedBottom = S.images.length * VITEM_H;
+  if (viewBottom > loadedBottom - VITEM_H * 20 && S.images.length < S.totalImages) {
+    _loadMoreIfNeeded();
+  }
+}
+
+document.getElementById('img-list').addEventListener('scroll', () => {
+  _renderVisibleSlice();
+});
 
 function hasAnnotation(name) {
   // Simple check: if current image, check shapes length
@@ -895,22 +1005,28 @@ document.getElementById('btn-prev').addEventListener('click', () => navFiltered(
 document.getElementById('btn-next').addEventListener('click', () => navFiltered(1));
 
 function navFiltered(dir) {
-  if (S.filteredImages.length === 0) return;
-  const curPos = S.filteredImages.indexOf(S.currentIdx);
-  let next;
-  if (curPos < 0) {
-    next = dir > 0 ? 0 : S.filteredImages.length - 1;
-  } else {
-    next = curPos + dir;
+  if (S.images.length === 0 && S.totalImages === 0) return;
+  let next = S.currentIdx + dir;
+  if (next < 0) next = 0;
+  if (next >= S.images.length) {
+    if (S.images.length < S.totalImages) {
+      _loadMoreIfNeeded().then(() => {
+        if (next < S.images.length) loadImage(next);
+      });
+      return;
+    }
+    return;
   }
-  if (next >= 0 && next < S.filteredImages.length) {
-    loadImage(S.filteredImages[next]);
-  }
+  loadImage(next);
 }
 document.getElementById('btn-zoomin').addEventListener('click', () => { zoomCenter(1.2); });
 document.getElementById('btn-zoomout').addEventListener('click', () => { zoomCenter(0.8); });
 document.getElementById('btn-fit').addEventListener('click', () => { fitView(); draw(); });
-document.getElementById('search').addEventListener('input', renderImageList);
+let _searchTimer = 0;
+document.getElementById('search').addEventListener('input', () => {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => fetchImages(), 250);
+});
 
 function zoomCenter(factor) {
   const cx = wrap.clientWidth / 2, cy = wrap.clientHeight / 2;
@@ -1023,7 +1139,7 @@ document.addEventListener('keydown', e => {
     case 'a': navFiltered(-1); break;
     case 'd': navFiltered(1); break;
     case 'f': fitView(); draw(); break;
-    case 'j': if (S.filteredImages.length > 0) loadImage(S.filteredImages[Math.floor(Math.random() * S.filteredImages.length)]); break;
+    case 'j': if (S.images.length > 0) loadImage(Math.floor(Math.random() * S.images.length)); break;
     case 'Delete': case 'Backspace': deleteSelected(); break;
     case 'Escape':
       if (S.drawing) { S.drawing = false; S.drawPoints = []; draw(); }
@@ -1277,17 +1393,17 @@ document.getElementById('btn-conflicts').addEventListener('click', async () => {
     const r = await fetch('/api/conflicts?iou=0.5');
     const data = await r.json();
     if (!data.ok || data.total_images === 0) {
-      alert(`未发现冲突标注 (共扫描 ${S.images.length} 张图片)`);
+      alert(`未发现冲突标注 (共扫描 ${S.totalImages} 张图片)`);
       return;
     }
-    // Filter image list to only conflict images
-    const conflictNames = new Set(data.conflicts.map(c => c.image));
-    S.filteredImages = S.images.map((name, i) => ({ name, i }))
-      .filter(x => conflictNames.has(x.name))
-      .map(x => x.i);
+    // Show only conflict images by filtering via a special search
+    // Store conflict image names for reference
+    const conflictNames = data.conflicts.map(c => c.image);
+    S.images = conflictNames;
+    S.totalImages = conflictNames.length;
     renderImageList();
     alert(`发现 ${data.total_images} 张图片存在冲突标注 (共 ${data.total_pairs} 对), 已过滤显示`);
-    if (S.filteredImages.length > 0) loadImage(S.filteredImages[0]);
+    if (S.images.length > 0) loadImage(0);
   } finally {
     document.getElementById('btn-conflicts').textContent = '⚠ 冲突';
     document.getElementById('btn-conflicts').disabled = false;
@@ -1682,8 +1798,8 @@ document.getElementById('sam3-batch').addEventListener('click', sam3RunBatch);
 async function sam3RunBatch() {
   const text = document.getElementById('sam3-text').value.trim();
   if (!text) { alert('请输入文本提示'); return; }
-  // Use filtered images list
-  const imgs = S.filteredImages.map(i => S.images[i]);
+  // Use current loaded images list
+  const imgs = [...S.images];
   if (imgs.length === 0) { alert('没有图片'); return; }
   if (!confirm(`将对 ${imgs.length} 张图片进行批量推理\n文本: ${text}\n已有标注的图片将跳过\n\n继续？`)) return;
 

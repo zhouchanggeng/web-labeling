@@ -60,12 +60,21 @@ python app.py --data /path/to/images
 - 标签输入时显示已有标签的快捷选择按钮
 - 标签筛选：点击侧边栏标签可筛选包含该标签的图片（实时统计）
 - 撤销操作（Ctrl+Z），支持最多 50 步
+- 自动保存：切换图片时自动保存当前标注，无需手动操作
 
 ### 显示控制
 - 标注框显示/隐藏切换（单个或全部）
 - 标签文字显示/隐藏切换（Aa 按钮）
 - 实时显示鼠标在图像上的坐标位置
 - 标注列表显示每个框的宽×高像素尺寸
+
+### 性能优化（大量图片场景）
+- 懒加载分页：图片列表按需分批加载（每页 200 张），不再一次性拉取全部文件名
+- 虚拟滚动：侧边栏图片列表只渲染可见区域的 DOM 节点，万级图片无卡顿
+- 服务端过滤：搜索和标签筛选在后端完成，前端只接收匹配结果
+- 图片预加载：自动预加载相邻图片，切图更流畅
+- 防抖搜索：搜索输入 250ms 防抖，减少无效请求
+- 目录扫描缓存：后端缓存图片列表和标签扫描结果，避免重复磁盘 IO
 
 ### SAM3 AI 辅助标注
 - 集成 Meta SAM3（Segment Anything Model 3）模型
@@ -99,6 +108,25 @@ python app.py --data /path/to/images
 - 保存统一输出为 X-AnyLabeling JSON 格式
 - 前端可切换图片目录、标注目录和标注格式（📂 按钮）
 - 文件夹浏览器支持点击选择目录
+
+## 项目结构
+
+```
+web-labeling/
+├── app.py                          # 开发入口（转发到 src/web_labeling/app.py）
+├── pyproject.toml                  # pip 包配置
+├── requirements.txt                # 依赖
+├── README.md
+└── src/web_labeling/               # 唯一的业务代码（pip 包和开发共用）
+    ├── __init__.py
+    ├── app.py                      # Flask 后端（API + 标注读写 + SAM3 + 评估）
+    └── static/
+        ├── index.html              # 前端页面
+        ├── labeler.js              # 前端逻辑（标注、虚拟滚动、懒加载等）
+        └── style.css               # 样式
+```
+
+> 只维护一份代码：`python app.py` 开发运行和 `pip install` 后的 `web-labeling` 命令使用同一套 `src/web_labeling/` 下的文件。
 
 ## 快捷键
 

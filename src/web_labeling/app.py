@@ -430,12 +430,34 @@ def _scan_all_conflicts(iou_thresh=0.5):
 
 @app.route("/")
 def index():
-    return send_from_directory("static", "index.html")
+    return send_from_directory(app.static_folder, "index.html")
 
 
 @app.route("/api/images")
 def api_images():
-    return jsonify(_list_images())
+    images = _list_images()
+    # Support lazy-loading pagination with optional search & label filter
+    offset = request.args.get("offset", type=int)
+    limit = request.args.get("limit", type=int)
+    search = request.args.get("search", "", type=str).strip().lower()
+    label = request.args.get("label", "", type=str).strip()
+
+    # Apply label filter
+    if label:
+        labels = _scan_labels()
+        allowed = set(labels.get(label, []))
+        images = [img for img in images if img in allowed]
+
+    # Apply search filter
+    if search:
+        images = [img for img in images if search in img.lower()]
+
+    total = len(images)
+
+    if offset is not None and limit is not None:
+        page = images[offset:offset + limit]
+        return jsonify({"total": total, "offset": offset, "images": page})
+    return jsonify(images)
 
 
 @app.route("/api/image/<path:name>")
