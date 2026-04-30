@@ -54,6 +54,10 @@
   <div id="right-panel">
     <h3>标注列表 <button id="btn-toggle-labels" title="显示/隐藏标签文字" style="float:right;background:none;border:none;color:#a6adc8;cursor:pointer;font-size:12px;padding:0 4px;margin-right:2px;">Aa</button><button id="btn-toggle-all-vis" title="显示/隐藏全部" style="float:right;background:none;border:none;color:#a6adc8;cursor:pointer;font-size:14px;padding:0 4px;">👁</button></h3>
     <div id="mouse-coords">坐标: -</div>
+    <div id="img-classify">
+      <h4>图片分类 <button id="btn-classify-settings" title="设置分类标签" style="float:right;background:none;border:none;color:#a6adc8;cursor:pointer;font-size:12px;padding:0;">⚙</button></h4>
+      <div id="classify-tags"></div>
+    </div>
     <div id="shape-list"></div>
     <div id="shape-editor" style="display:none">
       <h4>编辑标注</h4>
@@ -200,6 +204,19 @@
     <div id="analysis-content">加载中...</div>
     <div class="dialog-btns">
       <button id="analysis-close">关闭</button>
+    </div>
+  </div>
+</div>
+<!-- Classification tag settings dialog -->
+<div id="classify-dialog" style="display:none">
+  <div class="dialog-bg"></div>
+  <div class="dialog-box classify-dialog-box">
+    <h3>设置分类标签</h3>
+    <p style="font-size:12px;color:#a6adc8;margin-bottom:8px;">每行一个标签名称，用于给整张图片打分类标签</p>
+    <textarea id="classify-tags-input" rows="8" placeholder="例如：&#10;白天&#10;夜晚&#10;室内&#10;室外&#10;有人&#10;无人"></textarea>
+    <div class="dialog-btns">
+      <button id="classify-save">确定</button>
+      <button id="classify-cancel">取消</button>
     </div>
   </div>
 </div>

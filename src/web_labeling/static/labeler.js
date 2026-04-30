@@ -202,6 +202,7 @@ async function loadImage(idx) {
 
   renderShapeList();
   renderImageList();
+  renderClassifyTags();
 
   // Preload adjacent images
   _preloadAdjacent(idx);
@@ -1975,6 +1976,64 @@ window.addEventListener('resize', () => {
   if (S.img) { fitView(); } else { resizeCanvas(); }
 });
 
+// ============ Image classification tags ============
+let _classifyTags = []; // available tag names
+
+async function loadClassifyTags() {
+  try {
+    const r = await fetch('/api/classify_tags');
+    const data = await r.json();
+    _classifyTags = data.tags || [];
+  } catch(e) { _classifyTags = []; }
+  renderClassifyTags();
+}
+
+function renderClassifyTags() {
+  const container = document.getElementById('classify-tags');
+  if (!_classifyTags.length) { container.innerHTML = ''; return; }
+  const flags = (S.annotation && S.annotation.flags) || {};
+  container.innerHTML = _classifyTags.map(tag => {
+    const active = flags[tag] === true;
+    const c = colorFor(tag);
+    return `<span class="cls-tag${active ? ' active' : ''}" data-tag="${tag}" style="--tag-color:${c}">${tag}</span>`;
+  }).join('');
+  container.querySelectorAll('.cls-tag').forEach(el => {
+    el.addEventListener('click', () => {
+      const tag = el.dataset.tag;
+      if (!S.annotation) return;
+      if (!S.annotation.flags) S.annotation.flags = {};
+      S.annotation.flags[tag] = !S.annotation.flags[tag];
+      if (!S.annotation.flags[tag]) delete S.annotation.flags[tag];
+      S.dirty = true;
+      renderClassifyTags();
+    });
+  });
+}
+
+// Settings dialog
+document.getElementById('btn-classify-settings').addEventListener('click', () => {
+  const dlg = document.getElementById('classify-dialog');
+  dlg.style.display = 'block';
+  document.getElementById('classify-tags-input').value = _classifyTags.join('\n');
+});
+
+document.getElementById('classify-save').addEventListener('click', async () => {
+  const text = document.getElementById('classify-tags-input').value;
+  const tags = text.split('\n').map(s => s.trim()).filter(Boolean);
+  await fetch('/api/classify_tags', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ tags }),
+  });
+  _classifyTags = tags;
+  renderClassifyTags();
+  document.getElementById('classify-dialog').style.display = 'none';
+});
+
+document.getElementById('classify-cancel').addEventListener('click', () => {
+  document.getElementById('classify-dialog').style.display = 'none';
+});
+
 // ============ TensorBoard ============
 document.getElementById('btn-tensorboard').addEventListener('click', async () => {
   const dlg = document.getElementById('tb-dialog');
@@ -2081,6 +2140,7 @@ async function _tbRefreshStatus() {
 (async () => {
   await fetchImages();
   await fetchLabels();
+  await loadClassifyTags();
   resizeCanvas();
   if (S.images.length > 0) loadImage(0);
 })();

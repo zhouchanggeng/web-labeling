@@ -1565,6 +1565,41 @@ def api_sam3_batch():
     return app.response_class(generate(), mimetype='text/event-stream')
 
 
+# ============ Classification tag definitions ============
+
+_classify_tags_file = None  # resolved path, set in main() or lazily
+
+
+def _get_classify_tags_file():
+    global _classify_tags_file
+    if _classify_tags_file:
+        return Path(_classify_tags_file)
+    return _label_dir() / ".classify_tags.json"
+
+
+@app.route("/api/classify_tags", methods=["GET"])
+def api_get_classify_tags():
+    fp = _get_classify_tags_file()
+    if fp.exists():
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                return jsonify(json.load(f))
+        except Exception:
+            pass
+    return jsonify({"tags": []})
+
+
+@app.route("/api/classify_tags", methods=["POST"])
+def api_set_classify_tags():
+    data = request.get_json(force=True)
+    tags = data.get("tags", [])
+    fp = _get_classify_tags_file()
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump({"tags": tags}, f, ensure_ascii=False, indent=2)
+    return jsonify({"ok": True})
+
+
 # ============ TensorBoard management ============
 _tb_process = None   # subprocess.Popen instance
 _tb_port = None      # port TensorBoard is running on
