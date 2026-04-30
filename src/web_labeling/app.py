@@ -298,13 +298,41 @@ def _read_json(img_name):
 def _read_annotation(img_name):
     fmt = _get_current_format()
     if fmt == "voc":
-        return _read_voc(img_name)
+        ann = _read_voc(img_name)
     elif fmt == "coco":
-        return _read_coco(img_name)
+        ann = _read_coco(img_name)
     elif fmt == "yolo":
-        return _read_yolo(img_name)
+        ann = _read_yolo(img_name)
     else:
-        return _read_json(img_name)
+        ann = _read_json(img_name)
+    # Merge image-level flags from separate file (for non-JSON formats)
+    ann["flags"] = _read_flags(img_name)
+    return ann
+
+
+def _read_flags(img_name):
+    """Read image-level classification flags from 图片名.flags.json."""
+    fp = _label_dir() / (Path(img_name).stem + ".flags.json")
+    if fp.exists():
+        try:
+            with open(fp, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            pass
+    return {}
+
+
+def _save_flags(img_name, flags):
+    """Save image-level classification flags to 图片名.flags.json."""
+    fp = _label_dir() / (Path(img_name).stem + ".flags.json")
+    if not flags:
+        if fp.exists():
+            fp.unlink()
+        return
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    with open(fp, "w", encoding="utf-8") as f:
+        json.dump(flags, f, ensure_ascii=False, indent=2)
 
 
 # ============ Labels scan (cached) ============
@@ -468,10 +496,12 @@ def _save_annotation(img_name, data):
     fmt = _get_current_format()
     if fmt == "yolo":
         _save_yolo(img_name, data)
+        _save_flags(img_name, data.get("flags", {}))
     elif fmt == "voc":
         _save_voc(img_name, data)
+        _save_flags(img_name, data.get("flags", {}))
     else:
-        # json and coco both save as per-image JSON
+        # json format stores flags inside the JSON file itself
         _save_json(img_name, data)
 
 
