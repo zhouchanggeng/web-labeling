@@ -18,6 +18,20 @@ cd web-labeling
 pip install .
 ```
 
+## 更新
+
+仓库有新版本时，重新安装即可：
+
+```bash
+pip install --upgrade git+https://github.com/zhouchanggeng/web-labeling.git
+```
+
+如果缓存导致未更新，加 `--no-cache-dir` 强制拉取：
+
+```bash
+pip install --upgrade --no-cache-dir git+https://github.com/zhouchanggeng/web-labeling.git
+```
+
 ## 使用
 
 ```bash
